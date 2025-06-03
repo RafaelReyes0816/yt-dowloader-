@@ -30,6 +30,7 @@
 3. **Instala las dependencias:**
    ```bash
    pip install yt-dlp
+   pip install pyinstaller
    # Asegúrate de tener ffmpeg instalado en tu sistema
    ```
 
