@@ -154,7 +154,7 @@ def descargar_musica(url, carpeta, modo, calidad, subtitulos=False, playlist=Fal
 
         with yt_dlp.YoutubeDL(opciones) as ydl:
             ydl.download([url])
-        return True, f"Descarga completada"
+        return True, "Descarga completada"
 
     except yt_dlp.utils.DownloadError as e:
         msg = str(e).lower()
@@ -300,11 +300,11 @@ class App:
         scrollbar = ttk.Scrollbar(cola_frame, orient=tk.VERTICAL, command=self.cola_tree.yview)
         self.cola_tree.configure(yscrollcommand=scrollbar.set)
 
-        self.cola_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.cola_tree.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         btn_row = ttk.Frame(cola_frame)
-        btn_row.pack(fill=tk.X, pady=(8, 0))
+        btn_row.pack(side=tk.BOTTOM, fill=tk.X, pady=(8, 0))
         ttk.Button(btn_row, text="Iniciar descargas", command=self._iniciar_cola).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(btn_row, text="Limpiar cola", command=self._limpiar_cola).pack(side=tk.LEFT)
 
@@ -432,7 +432,8 @@ class App:
         subtitulos = self.subtitulos_var.get()
         playlist = self.playlist_var.get()
 
-        item_id = self.cola_tree.insert("", tk.END, values=("Pendiente", url[:60] + "...",
+        display_url = url if len(url) <= 60 else url[:57] + "..."
+        item_id = self.cola_tree.insert("", tk.END, values=("Pendiente", display_url,
                                          "Audio" if modo == "audio" else "Video"))
         self.descarga_queue.put({
             "item_id": item_id,
@@ -494,7 +495,7 @@ class App:
                 self.root.after(0, lambda i=item_id: self.cola_tree.set(i, "estado", "Completado"))
                 self.historial.append({"url": item["url"], "fecha": time.strftime("%Y-%m-%d %H:%M")})
             else:
-                self.root.after(0, lambda i=item_id, m=mensaje: self.cola_tree.set(i, "estado", f"Error"))
+                self.root.after(0, lambda i=item_id: self.cola_tree.set(i, "estado", "Error"))
                 self.root.after(0, lambda m=mensaje: messagebox.showerror("Error", m))
 
             self.root.after(0, lambda: self.progress.configure(value=100))
