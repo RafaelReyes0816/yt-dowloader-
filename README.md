@@ -1,61 +1,60 @@
 # YT-DownLoader del Jaeger
 
-🎵 **YT-DownLoader del Jaeger** es una aplicación de escritorio en Python que te permite descargar audio (mp3) o video (mp4) de YouTube de manera sencilla y elegante, eligiendo la calidad que prefieras. Cuenta con una interfaz gráfica moderna y personalizable.
+**YT-DownLoader del Jaeger** es una aplicación de escritorio en Python que te permite descargar audio (mp3) o video (mp4) de YouTube con una interfaz moderna y elegante.
 
 ## Características
+
 - Descarga audio en formato **mp3** (calidad seleccionable: 128, 192, 256, 320 kbps)
 - Descarga video en formato **mp4** (calidad seleccionable: 360p, 480p, 720p, 1080p)
-- Interfaz gráfica elegante y oscura
-- Selección fácil de formato y calidad
-- Descarga individual (no playlist completa)
-- Compatible con Linux, Windows y MacOS
-
-## Requisitos
-- Python 3.8 o superior
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp)
-- [ffmpeg](https://ffmpeg.org/) (para la conversión a mp3/mp4)
-- Tkinter (normalmente incluido en Python, en Linux puede requerir `sudo apt install python3-tk`)
+- Interfaz gráfica moderna con tema oscuro (ttkbootstrap)
+- Barra de progreso en tiempo real
+- Verificación automática de actualizaciones
+- Compatible con Linux, Windows y macOS
 
 ## Instalación
-1. **Clona el repositorio:**
-   ```bash
-   git clone https://github.com/tuusuario/Youtube-Dowloader.git
-   cd Youtube-Dowloader
-   ```
-2. **Crea y activa un entorno virtual (opcional pero recomendado):**
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate  # En Windows: venv\Scripts\activate
-   ```
-3. **Instala las dependencias:**
-   ```bash
-   pip install yt-dlp
-   pip install pyinstaller
-   # Asegúrate de tener ffmpeg instalado en tu sistema
-   ```
 
-## Uso
-1. Ejecuta la aplicación:
-   ```bash
-   python yt-dowloader.py
-   ```
-2. Pega la URL del video de YouTube.
-3. Elige si quieres descargar audio (mp3) o video (mp4).
-4. Selecciona la calidad deseada.
-5. Haz clic en **Descargar**.
-6. El archivo se guardará en la carpeta `Mi_musica` dentro del proyecto.
+### Descargar ejecutable
 
-## Captura de pantalla
-_Agrega aquí una imagen de la interfaz ejecutando el programa:_
+Descarga la última versión desde [Releases](https://github.com/RafaelReyes0816/yt-dowloader-/releases). No requiere Python instalado.
 
-```
-![screenshot](screenshot.png)
+### Ejecutar desde código fuente
+
+```bash
+git clone https://github.com/RafaelReyes0816/yt-dowloader-.git
+cd yt-dowloader-
+pip install -r requirements.txt
+python yt-dowloader.py
 ```
 
-## Créditos y agradecimientos
-- Inspirado por la comunidad open source.
-- Usa [yt-dlp](https://github.com/yt-dlp/yt-dlp) y [ffmpeg](https://ffmpeg.org/).
-- Desarrollado por Rafael Reyes (Jaeger).
+**Requisitos del sistema:**
+- Python 3.8 o superior
+- `ffmpeg` instalado y en PATH (requerido para conversión a mp3/mp4)
+- En Linux: `sudo apt install python3-tk` (si no viene incluido)
+
+## Build standalone
+
+```bash
+pip install pyinstaller yt-dlp ttkbootstrap
+pyinstaller yt-dowloader.spec
+```
+
+El ejecutable se genera en `dist/`.
+
+## Arquitectura
+
+- `yt-dowloader.py` — App completa: interfaz tkinter/ttkbootstrap + lógica de descarga con yt-dlp
+- `yt-dowloader.spec` — Configuración de PyInstaller (multiplataforma)
+- `.github/workflows/build.yml` — CI/CD: build automático para Linux, Windows, macOS
+
+## Distribución
+
+Los ejecutables se generan automáticamente via GitHub Actions al crear un tag `v*`:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
 
 ---
-¡Disfruta descargando tu música y videos favoritos de YouTube! 🎶 
+
+Desarrollado por Rafael Reyes (Jaeger).

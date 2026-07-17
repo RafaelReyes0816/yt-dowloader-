@@ -1,0 +1,12 @@
+bfg-*.jar
+*.jar.1
+dist/
+build/
+__pycache__/
+*.pyc
+*.pyo
+*.spec.bak
+*.egg-info/
+.env
+venv/
+Mi_musica/

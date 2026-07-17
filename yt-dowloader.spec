@@ -1,12 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
+import sys
 
+block_cipher = None
 
 a = Analysis(
     ['yt-dowloader.py'],
     pathex=[],
     binaries=[],
     datas=[],
-    hiddenimports=[],
+    hiddenimports=[
+        'ttkbootstrap',
+        'ttkbootstrap.constants',
+        'ttkbootstrap.themes',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -14,7 +20,7 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
-pyz = PYZ(a.pure)
+pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(
     pyz,
@@ -32,7 +38,6 @@ exe = EXE(
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
-    target_arch='win64',
     codesign_identity=None,
     entitlements_file=None,
 )
