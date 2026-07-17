@@ -1,14 +1,27 @@
 #!/usr/bin/env python3
-__version__ = "1.0.0"
+__version__ = "1.0.2"
 
 import yt_dlp
 import os
 import sys
+import shutil
 import threading
 import urllib.request
 import json
 import tkinter as tk
 from tkinter import messagebox
+
+
+def find_ffmpeg():
+    """Find ffmpeg binary path for yt-dlp."""
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg:
+        return os.path.dirname(ffmpeg)
+    if sys.platform == "win32":
+        for path in [r"C:\ffmpeg\bin", r"C:\Program Files\ffmpeg\bin"]:
+            if os.path.isfile(os.path.join(path, "ffmpeg.exe")):
+                return path
+    return None
 
 try:
     import ttkbootstrap as ttk
@@ -35,6 +48,8 @@ def descargar_musica(url, carpeta="Mi_musica", modo="audio", calidad="192", prog
                     progress_callback(downloaded / total)
             elif d["status"] == "finished" and progress_callback:
                 progress_callback(1.0)
+
+        ffmpeg_path = find_ffmpeg()
 
         if modo == "audio":
             opciones = {
@@ -66,6 +81,9 @@ def descargar_musica(url, carpeta="Mi_musica", modo="audio", calidad="192", prog
                 "progress_hooks": [progress_hook],
             }
 
+        if ffmpeg_path:
+            opciones["ffmpeg_location"] = ffmpeg_path
+
         with yt_dlp.YoutubeDL(opciones) as ydl:
             ydl.download([url])
         return True, f"{('Audio' if modo=='audio' else 'Video')} descargado correctamente"
@@ -80,6 +98,8 @@ def descargar_musica(url, carpeta="Mi_musica", modo="audio", calidad="192", prog
             return False, "El video requiere iniciar sesión en YouTube."
         elif "is not a valid url" in msg or "invalid url" in msg:
             return False, "La URL ingresada no es válida."
+        elif "ffmpeg" in msg:
+            return False, "No se encontró ffmpeg. Instálalo y asegúrate de que esté en el PATH del sistema."
         else:
             return False, f"Error de yt-dlp: {e}"
     except Exception as e:
