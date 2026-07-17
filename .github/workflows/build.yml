@@ -35,6 +35,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y python3-tk
 
+      - name: Download ffmpeg (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+          Invoke-WebRequest -Uri $ffmpegUrl -OutFile ffmpeg.zip
+          Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg-temp
+          $zipDir = Get-ChildItem -Path ffmpeg-temp -Directory | Select-Object -First 1
+          Copy-Item "$($zipDir.FullName)/bin/ffmpeg.exe" -Destination dist/
+          Copy-Item "$($zipDir.FullName)/bin/ffprobe.exe" -Destination dist/
+          Remove-Item ffmpeg.zip
+          Remove-Item ffmpeg-temp -Recurse -Force
+
       - name: Install Python dependencies
         run: pip install pyinstaller yt-dlp ttkbootstrap
 
@@ -46,6 +59,7 @@ jobs:
         run: |
           if [ "${{ runner.os }}" == "Windows" ]; then
             ls -lh dist/yt-dowloader.exe
+            ls -lh dist/ffmpeg.exe
           else
             ls -lh dist/yt-dowloader
           fi

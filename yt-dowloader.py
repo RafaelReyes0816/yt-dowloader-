@@ -14,13 +14,24 @@ from tkinter import messagebox
 
 def find_ffmpeg():
     """Find ffmpeg binary path for yt-dlp."""
+    # Check next to the executable (bundled ffmpeg for Windows)
+    if getattr(sys, 'frozen', False):
+        app_dir = os.path.dirname(sys.executable)
+        for name in ["ffmpeg.exe", "ffmpeg"]:
+            if os.path.isfile(os.path.join(app_dir, name)):
+                return app_dir
+
+    # Check system PATH
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg:
         return os.path.dirname(ffmpeg)
+
+    # Common Windows locations
     if sys.platform == "win32":
         for path in [r"C:\ffmpeg\bin", r"C:\Program Files\ffmpeg\bin"]:
             if os.path.isfile(os.path.join(path, "ffmpeg.exe")):
                 return path
+
     return None
 
 try:

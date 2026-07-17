@@ -17,6 +17,18 @@
 
 Descarga la última versión desde [Releases](https://github.com/RafaelReyes0816/yt-dowloader-/releases). No requiere Python instalado.
 
+**Windows:** El ejecutable ya incluye ffmpeg. Solo descarga y ejecuta.
+
+**Linux:** Instala ffmpeg antes de usar:
+```bash
+sudo apt install ffmpeg
+```
+
+**macOS:** Instala ffmpeg antes de usar:
+```bash
+brew install ffmpeg
+```
+
 ### Ejecutar desde código fuente
 
 ```bash
