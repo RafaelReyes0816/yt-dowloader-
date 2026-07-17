@@ -213,7 +213,6 @@ class App(ctk.CTk):
         self.is_downloading = False
         self.clipboard_auto = self.prefs.get("clipboard_auto", True)
         self.ffmpeg_ok = find_ffmpeg() is not None
-        self.preview_data = None
         self.queue_items = []
 
         self._build_ui()
@@ -243,8 +242,7 @@ class App(ctk.CTk):
         ctk.CTkLabel(header, textvariable=self.version_var, font=("Segoe UI", 11),
                      text_color=COLORS["text_dim"]).grid(row=0, column=2, padx=20)
 
-        ctk.CTkButton(header, text="Tema", command=self._cambiar_tema, width=60,
-                      fg_color=COLORS["bg3"], hover_color=COLORS["accent"]).grid(row=0, column=3, padx=(0, 20))
+
 
         # --- Seccion URL ---
         url_frame = ctk.CTkFrame(self, fg_color=COLORS["bg2"], corner_radius=12)
@@ -264,22 +262,8 @@ class App(ctk.CTk):
         self.url_entry.grid(row=0, column=0, sticky="ew", padx=(0, 10))
         self.url_entry.focus()
 
-        ctk.CTkButton(url_row, text="Preview", command=self._preview_video, width=80,
-                      fg_color=COLORS["bg3"], hover_color=COLORS["accent"]).grid(row=0, column=1, padx=(0, 5))
         ctk.CTkButton(url_row, text="Agregar", command=self._agregar_a_cola, width=80,
-                      fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"]).grid(row=0, column=2)
-
-        # Preview area
-        self.preview_frame = ctk.CTkFrame(url_frame, fg_color="transparent")
-        self.preview_frame.grid(row=2, column=0, sticky="ew", padx=15, pady=(0, 10))
-
-        self.preview_titulo = ctk.CTkLabel(self.preview_frame, text="", font=("Segoe UI", 12, "bold"),
-                                            text_color=COLORS["text"], wraplength=700, anchor="w", justify="left")
-        self.preview_titulo.pack(anchor="w")
-
-        self.preview_info = ctk.CTkLabel(self.preview_frame, text="", font=("Segoe UI", 11),
-                                          text_color=COLORS["text_dim"], anchor="w")
-        self.preview_info.pack(anchor="w")
+                      fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"]).grid(row=0, column=1)
 
         # --- Seccion Opciones ---
         opt_frame = ctk.CTkFrame(self, fg_color=COLORS["bg2"], corner_radius=12)
@@ -423,33 +407,6 @@ class App(ctk.CTk):
             pass
         self.after(2000, self._monitorear_clipboard)
 
-    def _preview_video(self):
-        url = self.url_entry.get().strip()
-        if not url:
-            messagebox.showwarning("Advertencia", "Ingresa una URL primero.")
-            return
-
-        self.preview_titulo.configure(text="Cargando info del video...")
-        self.preview_info.configure(text="")
-
-        def run():
-            data = extraer_info_video(url)
-            self.after(0, lambda: self._mostrar_preview(data))
-
-        threading.Thread(target=run, daemon=True).start()
-
-    def _mostrar_preview(self, data):
-        if data:
-            self.preview_data = data
-            self.preview_titulo.configure(text=data["titulo"])
-            info_parts = [data["uploader"], data["duracion"]]
-            if data.get("es_playlist"):
-                info_parts.insert(0, f"Playlist: {data['num_videos']} videos")
-            self.preview_info.configure(text=" | ".join(info_parts))
-        else:
-            self.preview_titulo.configure(text="")
-            self.preview_info.configure(text="No se pudo obtener info del video.")
-
     def _agregar_a_cola(self):
         url = self.url_entry.get().strip()
         if not url:
@@ -495,8 +452,6 @@ class App(ctk.CTk):
         })
 
         self.url_entry.delete(0, "end")
-        self.preview_titulo.configure(text="")
-        self.preview_info.configure(text="")
         self._guardar_prefs_actuales()
 
     def _iniciar_cola(self):
@@ -557,16 +512,8 @@ class App(ctk.CTk):
 
     def _limpiar_cola(self):
         for item in self.queue_items[:]:
-            if item["status_label"].cget("text") in ("Completado", "Error"):
-                item["frame"].destroy()
-                self.queue_items.remove(item)
-
-    def _cambiar_tema(self):
-        current = ctk.get_appearance_mode()
-        new_mode = "Light" if current == "Dark" else "Dark"
-        ctk.set_appearance_mode(new_mode)
-        self.prefs["tema"] = new_mode.lower()
-        guardar_preferencias(self.prefs)
+            item["frame"].destroy()
+        self.queue_items.clear()
 
     def _check_update_async(self):
         def run():
