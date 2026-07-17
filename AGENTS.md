@@ -2,7 +2,7 @@
 
 ## Project overview
 
-Single-file Python desktop app (tkinter + ttkbootstrap + yt-dlp) that downloads YouTube audio (mp3) or video (mp4) with quality selection. Includes auto-update checking via GitHub Releases API.
+Single-file Python desktop app (CustomTkinter + yt-dlp) that downloads YouTube audio (mp3) or video (mp4) with quality selection. Includes auto-update checking via GitHub Releases API.
 
 ## Run
 
@@ -16,7 +16,7 @@ System dependency: `ffmpeg` must be installed and on PATH (required by yt-dlp fo
 ## Build standalone executable
 
 ```bash
-pip install pyinstaller yt-dlp ttkbootstrap
+pip install pyinstaller yt-dlp customtkinter
 pyinstaller yt-dowloader.spec
 ```
 
@@ -34,10 +34,10 @@ git push origin v1.0.0
 
 ## Architecture
 
-- `yt-dowloader.py` — entire app: `App` class handles tkinter UI, `descargar_musica()` handles download logic with yt-dlp progress hooks. `Mi_musica/` folder is created at runtime as download target. `check_for_update()` queries GitHub Releases API.
-- `yt-dowloader.spec` — PyInstaller build config (multiplatform, includes ttkbootstrap hidden imports).
+- `yt-dowloader.py` — entire app: `App` class handles CustomTkinter UI, `descargar_musica()` handles download logic with yt-dlp progress hooks. `Mi_musica/` folder is created at runtime as download target. `check_for_update()` queries GitHub Releases API.
+- `yt-dowloader.spec` — PyInstaller build config (multiplatform, includes CustomTkinter data files).
 - `.github/workflows/build.yml` — CI/CD for 3 platforms.
-- `requirements.txt` — `yt-dlp`, `ttkbootstrap`, `pyinstaller`.
+- `requirements.txt` — `yt-dlp`, `customtkinter`, `pyinstaller`.
 
 ## Notes
 

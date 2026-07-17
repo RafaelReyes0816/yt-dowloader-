@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 import yt_dlp
 import os
@@ -11,17 +11,9 @@ import shutil
 import queue
 import threading
 import urllib.request
-import tkinter as tk
+import customtkinter as ctk
+
 from tkinter import filedialog, messagebox
-
-try:
-    import ttkbootstrap as ttk
-    from ttkbootstrap.constants import *
-    HAS_BOOTSTRAP = True
-except ImportError:
-    from tkinter import ttk
-    HAS_BOOTSTRAP = False
-
 
 GITHUB_REPO = "RafaelReyes0816/yt-dowloader-"
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".yt-downloader")
@@ -29,6 +21,20 @@ CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 YOUTUBE_REGEX = re.compile(
     r'(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/|youtube\.com/embed/|youtube\.com/v/)([a-zA-Z0-9_-]{11})'
 )
+
+COLORS = {
+    "bg": "#1a1a2e",
+    "bg2": "#16213e",
+    "bg3": "#0f3460",
+    "accent": "#e94560",
+    "accent_hover": "#c73e54",
+    "text": "#ffffff",
+    "text_dim": "#a0a0b0",
+    "success": "#2ecc71",
+    "warning": "#f39c12",
+    "error": "#e74c3c",
+    "input_bg": "#0f3460",
+}
 
 
 def find_ffmpeg():
@@ -55,7 +61,7 @@ def cargar_preferencias():
         "subtitulos": False,
         "playlist": False,
         "clipboard_auto": True,
-        "tema": "darkly",
+        "tema": "dark",
     }
     try:
         if os.path.isfile(CONFIG_FILE):
@@ -188,13 +194,18 @@ def check_for_update(current_version):
         return False, current_version, ""
 
 
-class App:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("YT-DownLoader del Jaeger")
-        self.root.geometry("850x750")
-        self.root.minsize(850, 750)
-        self.root.resizable(True, True)
+class App(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+
+        self.title("YT-DownLoader del Jaeger")
+        self.geometry("900x800")
+        self.minsize(900, 800)
+        self.resizable(True, True)
+        self.configure(fg_color=COLORS["bg"])
+
+        ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("blue")
 
         self.prefs = cargar_preferencias()
         self.descarga_queue = queue.Queue()
@@ -203,14 +214,7 @@ class App:
         self.clipboard_auto = self.prefs.get("clipboard_auto", True)
         self.ffmpeg_ok = find_ffmpeg() is not None
         self.preview_data = None
-
-        tema = self.prefs.get("tema", "darkly")
-        if HAS_BOOTSTRAP:
-            self.root.style = ttk.Style(tema)
-        else:
-            self.root.configure(bg="#181818")
-            style = ttk.Style()
-            style.theme_use("clam")
+        self.queue_items = []
 
         self._build_ui()
         self._aplicar_preferencias()
@@ -219,124 +223,156 @@ class App:
             self._monitorear_clipboard()
 
     def _build_ui(self):
-        main_frame = ttk.Frame(self.root, padding=16)
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(3, weight=1)
+
+        # --- Header ---
+        header = ctk.CTkFrame(self, fg_color=COLORS["bg2"], corner_radius=0, height=60)
+        header.grid(row=0, column=0, sticky="ew", padx=0, pady=0)
+        header.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(header, text="YT-DownLoader", font=("Segoe UI", 24, "bold"),
+                     text_color=COLORS["accent"]).grid(row=0, column=0, padx=20, pady=15)
+
+        ffmpeg_text = "ffmpeg OK" if self.ffmpeg_ok else "ffmpeg NO ENCONTRADO"
+        ffmpeg_color = COLORS["success"] if self.ffmpeg_ok else COLORS["error"]
+        ctk.CTkLabel(header, text=ffmpeg_text, font=("Segoe UI", 11),
+                     text_color=ffmpeg_color).grid(row=0, column=1, sticky="e", padx=10)
+
+        self.version_var = ctk.StringVar(value=f"v{__version__}")
+        ctk.CTkLabel(header, textvariable=self.version_var, font=("Segoe UI", 11),
+                     text_color=COLORS["text_dim"]).grid(row=0, column=2, padx=20)
+
+        ctk.CTkButton(header, text="Tema", command=self._cambiar_tema, width=60,
+                      fg_color=COLORS["bg3"], hover_color=COLORS["accent"]).grid(row=0, column=3, padx=(0, 20))
 
         # --- Seccion URL ---
-        url_frame = ttk.Labelframe(main_frame, text=" URL del Video ", padding=12)
-        url_frame.pack(fill=tk.X, pady=(0, 12))
+        url_frame = ctk.CTkFrame(self, fg_color=COLORS["bg2"], corner_radius=12)
+        url_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=(15, 10))
+        url_frame.grid_columnconfigure(0, weight=1)
 
-        self.url_var = tk.StringVar()
-        entry = ttk.Entry(url_frame, textvariable=self.url_var, font=("Segoe UI", 12), width=50)
-        entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
-        entry.focus()
+        ctk.CTkLabel(url_frame, text="URL del Video", font=("Segoe UI", 13, "bold"),
+                     text_color=COLORS["text"]).grid(row=0, column=0, sticky="w", padx=15, pady=(10, 5))
 
-        ttk.Button(url_frame, text="Preview", command=self._preview_video, width=10).pack(side=tk.LEFT, padx=(0, 4))
-        ttk.Button(url_frame, text="Agregar", command=self._agregar_a_cola, width=10).pack(side=tk.LEFT)
+        url_row = ctk.CTkFrame(url_frame, fg_color="transparent")
+        url_row.grid(row=1, column=0, sticky="ew", padx=15, pady=(0, 10))
+        url_row.grid_columnconfigure(0, weight=1)
+
+        self.url_entry = ctk.CTkEntry(url_row, placeholder_text="Pega la URL del video de YouTube...",
+                                       font=("Segoe UI", 13), height=40,
+                                       fg_color=COLORS["input_bg"], border_color=COLORS["bg3"])
+        self.url_entry.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+        self.url_entry.focus()
+
+        ctk.CTkButton(url_row, text="Preview", command=self._preview_video, width=80,
+                      fg_color=COLORS["bg3"], hover_color=COLORS["accent"]).grid(row=0, column=1, padx=(0, 5))
+        ctk.CTkButton(url_row, text="Agregar", command=self._agregar_a_cola, width=80,
+                      fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"]).grid(row=0, column=2)
 
         # Preview area
-        self.preview_frame = ttk.Frame(main_frame)
-        self.preview_frame.pack(fill=tk.X, pady=(0, 12))
+        self.preview_frame = ctk.CTkFrame(url_frame, fg_color="transparent")
+        self.preview_frame.grid(row=2, column=0, sticky="ew", padx=15, pady=(0, 10))
 
-        self.preview_label = ttk.Label(self.preview_frame, text="", font=("Segoe UI", 10))
-        self.preview_label.pack(anchor=tk.W)
+        self.preview_titulo = ctk.CTkLabel(self.preview_frame, text="", font=("Segoe UI", 12, "bold"),
+                                            text_color=COLORS["text"], wraplength=700, anchor="w", justify="left")
+        self.preview_titulo.pack(anchor="w")
 
-        self.preview_titulo = ttk.Label(self.preview_frame, text="", font=("Segoe UI", 11, "bold"))
-        self.preview_titulo.pack(anchor=tk.W)
-
-        self.preview_info = ttk.Label(self.preview_frame, text="", font=("Segoe UI", 9))
-        self.preview_info.pack(anchor=tk.W)
+        self.preview_info = ctk.CTkLabel(self.preview_frame, text="", font=("Segoe UI", 11),
+                                          text_color=COLORS["text_dim"], anchor="w")
+        self.preview_info.pack(anchor="w")
 
         # --- Seccion Opciones ---
-        opt_frame = ttk.Labelframe(main_frame, text=" Opciones ", padding=12)
-        opt_frame.pack(fill=tk.X, pady=(0, 12))
+        opt_frame = ctk.CTkFrame(self, fg_color=COLORS["bg2"], corner_radius=12)
+        opt_frame.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 10))
+        opt_frame.grid_columnconfigure(1, weight=1)
 
-        top_opts = ttk.Frame(opt_frame)
-        top_opts.pack(fill=tk.X, pady=(0, 8))
+        ctk.CTkLabel(opt_frame, text="Opciones", font=("Segoe UI", 13, "bold"),
+                     text_color=COLORS["text"]).grid(row=0, column=0, sticky="w", padx=15, pady=(10, 5))
 
-        self.modo_var = tk.StringVar(value=self.prefs.get("modo", "audio"))
-        ttk.Radiobutton(top_opts, text="Audio (mp3)", variable=self.modo_var, value="audio",
-                         command=self._actualizar_calidades).pack(side=tk.LEFT, padx=(0, 16))
-        ttk.Radiobutton(top_opts, text="Video (mp4)", variable=self.modo_var, value="video",
-                         command=self._actualizar_calidades).pack(side=tk.LEFT, padx=(0, 16))
+        row1 = ctk.CTkFrame(opt_frame, fg_color="transparent")
+        row1.grid(row=1, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 8))
 
-        ttk.Label(top_opts, text="Calidad:").pack(side=tk.LEFT, padx=(16, 4))
-        self.calidad_var = tk.StringVar()
-        self.calidad_combo = ttk.Combobox(top_opts, textvariable=self.calidad_var, width=8, state="readonly")
-        self.calidad_combo.pack(side=tk.LEFT)
+        self.modo_var = ctk.StringVar(value=self.prefs.get("modo", "audio"))
+        ctk.CTkRadioButton(row1, text="Audio (mp3)", variable=self.modo_var, value="audio",
+                           command=self._actualizar_calidades,
+                           fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"]).pack(side="left", padx=(0, 20))
+        ctk.CTkRadioButton(row1, text="Video (mp4)", variable=self.modo_var, value="video",
+                           command=self._actualizar_calidades,
+                           fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"]).pack(side="left", padx=(0, 20))
 
-        self.subtitulos_var = tk.BooleanVar(value=self.prefs.get("subtitulos", False))
-        ttk.Checkbutton(top_opts, text="Subtítulos", variable=self.subtitulos_var).pack(side=tk.LEFT, padx=(16, 0))
+        ctk.CTkLabel(row1, text="Calidad:", font=("Segoe UI", 12),
+                     text_color=COLORS["text"]).pack(side="left", padx=(20, 5))
+        self.calidad_var = ctk.StringVar()
+        self.calidad_option = ctk.CTkOptionMenu(row1, variable=self.calidad_var,
+                                                 values=["128", "192", "256", "320"],
+                                                 fg_color=COLORS["input_bg"],
+                                                 button_color=COLORS["bg3"],
+                                                 button_hover_color=COLORS["accent"],
+                                                 width=100)
+        self.calidad_option.pack(side="left")
 
-        self.playlist_var = tk.BooleanVar(value=self.prefs.get("playlist", False))
-        ttk.Checkbutton(top_opts, text="Playlist", variable=self.playlist_var).pack(side=tk.LEFT, padx=(8, 0))
+        self.subtitulos_var = ctk.BooleanVar(value=self.prefs.get("subtitulos", False))
+        ctk.CTkCheckBox(row1, text="Subtítulos", variable=self.subtitulos_var,
+                        fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"]).pack(side="left", padx=(20, 0))
 
-        self.clipboard_var = tk.BooleanVar(value=self.clipboard_auto)
-        ttk.Checkbutton(top_opts, text="Auto-detectar URL", variable=self.clipboard_var,
-                         command=self._toggle_clipboard).pack(side=tk.LEFT, padx=(16, 0))
+        self.playlist_var = ctk.BooleanVar(value=self.prefs.get("playlist", False))
+        ctk.CTkCheckBox(row1, text="Playlist", variable=self.playlist_var,
+                        fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"]).pack(side="left", padx=(10, 0))
+
+        self.clipboard_var = ctk.BooleanVar(value=self.clipboard_auto)
+        ctk.CTkCheckBox(row1, text="Auto-URL", variable=self.clipboard_var,
+                        command=self._toggle_clipboard,
+                        fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"]).pack(side="left", padx=(10, 0))
 
         # Carpeta destino
-        carpeta_row = ttk.Frame(opt_frame)
-        carpeta_row.pack(fill=tk.X)
+        row2 = ctk.CTkFrame(opt_frame, fg_color="transparent")
+        row2.grid(row=2, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 10))
+        row2.grid_columnconfigure(1, weight=1)
 
-        ttk.Label(carpeta_row, text="Guardar en:").pack(side=tk.LEFT, padx=(0, 8))
-        self.carpeta_var = tk.StringVar()
-        ttk.Entry(carpeta_row, textvariable=self.carpeta_var, font=("Segoe UI", 10)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
-        ttk.Button(carpeta_row, text="Examinar", command=self._seleccionar_carpeta, width=10).pack(side=tk.LEFT)
+        ctk.CTkLabel(row2, text="Guardar en:", font=("Segoe UI", 12),
+                     text_color=COLORS["text"]).grid(row=0, column=0, padx=(0, 8))
+        self.carpeta_var = ctk.StringVar()
+        ctk.CTkEntry(row2, textvariable=self.carpeta_var, font=("Segoe UI", 11),
+                     fg_color=COLORS["input_bg"], border_color=COLORS["bg3"]).grid(row=0, column=1, sticky="ew", padx=(0, 8))
+        ctk.CTkButton(row2, text="Examinar", command=self._seleccionar_carpeta, width=80,
+                      fg_color=COLORS["bg3"], hover_color=COLORS["accent"]).grid(row=0, column=2)
 
         # --- Seccion Cola ---
-        cola_frame = ttk.Labelframe(main_frame, text=" Cola de Descargas ", padding=12)
-        cola_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 12))
+        cola_frame = ctk.CTkFrame(self, fg_color=COLORS["bg2"], corner_radius=12)
+        cola_frame.grid(row=3, column=0, sticky="nsew", padx=20, pady=(0, 10))
+        cola_frame.grid_columnconfigure(0, weight=1)
+        cola_frame.grid_rowconfigure(0, weight=1)
 
-        cols = ("estado", "titulo", "tipo")
-        self.cola_tree = ttk.Treeview(cola_frame, columns=cols, show="headings", height=6)
-        self.cola_tree.heading("estado", text="Estado")
-        self.cola_tree.heading("titulo", text="Título")
-        self.cola_tree.heading("tipo", text="Tipo")
-        self.cola_tree.column("estado", width=100, anchor=tk.CENTER)
-        self.cola_tree.column("titulo", width=450)
-        self.cola_tree.column("tipo", width=80, anchor=tk.CENTER)
+        ctk.CTkLabel(cola_frame, text="Cola de Descargas", font=("Segoe UI", 13, "bold"),
+                     text_color=COLORS["text"]).grid(row=0, column=0, sticky="w", padx=15, pady=(10, 5))
 
-        scrollbar = ttk.Scrollbar(cola_frame, orient=tk.VERTICAL, command=self.cola_tree.yview)
-        self.cola_tree.configure(yscrollcommand=scrollbar.set)
+        self.cola_scroll = ctk.CTkScrollableFrame(cola_frame, fg_color=COLORS["bg"],
+                                                    corner_radius=8, scrollbar_fg_color=COLORS["bg3"])
+        self.cola_scroll.grid(row=1, column=0, sticky="nsew", padx=15, pady=(0, 10))
+        self.cola_scroll.grid_columnconfigure(0, weight=1)
 
-        self.cola_tree.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        btn_row = ctk.CTkFrame(cola_frame, fg_color="transparent")
+        btn_row.grid(row=2, column=0, sticky="ew", padx=15, pady=(0, 10))
 
-        btn_row = ttk.Frame(cola_frame)
-        btn_row.pack(side=tk.BOTTOM, fill=tk.X, pady=(8, 0))
-        ttk.Button(btn_row, text="Iniciar descargas", command=self._iniciar_cola).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(btn_row, text="Limpiar cola", command=self._limpiar_cola).pack(side=tk.LEFT)
+        ctk.CTkButton(btn_row, text="Iniciar descargas", command=self._iniciar_cola,
+                      fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"]).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(btn_row, text="Limpiar cola", command=self._limpiar_cola,
+                      fg_color=COLORS["bg3"], hover_color=COLORS["accent"]).pack(side="left")
 
         # --- Seccion Progreso ---
-        prog_frame = ttk.Labelframe(main_frame, text=" Progreso ", padding=12)
-        prog_frame.pack(fill=tk.X, pady=(0, 8))
+        prog_frame = ctk.CTkFrame(self, fg_color=COLORS["bg2"], corner_radius=12)
+        prog_frame.grid(row=4, column=0, sticky="ew", padx=20, pady=(0, 15))
+        prog_frame.grid_columnconfigure(0, weight=1)
 
-        if HAS_BOOTSTRAP:
-            self.progress = ttk.Progressbar(prog_frame, bootstyle="info-striped", length=600, mode="determinate")
-        else:
-            self.progress = ttk.Progressbar(prog_frame, length=600, mode="determinate")
-        self.progress.pack(fill=tk.X, pady=(0, 8))
+        self.progress = ctk.CTkProgressBar(prog_frame, height=12, corner_radius=6,
+                                            progress_color=COLORS["accent"],
+                                            fg_color=COLORS["bg3"])
+        self.progress.grid(row=0, column=0, sticky="ew", padx=15, pady=(12, 5))
+        self.progress.set(0)
 
-        self.estado_var = tk.StringVar(value="Listo")
-        ttk.Label(prog_frame, textvariable=self.estado_var, font=("Segoe UI", 10)).pack(anchor=tk.W)
-
-        # --- Footer ---
-        footer = ttk.Frame(main_frame)
-        footer.pack(fill=tk.X)
-
-        ffmpeg_text = "ffmpeg: OK" if self.ffmpeg_ok else "ffmpeg: NO ENCONTRADO"
-        ffmpeg_color = "success" if self.ffmpeg_ok else "danger"
-        if HAS_BOOTSTRAP:
-            ttk.Label(footer, text=ffmpeg_text, bootstyle=ffmpeg_color, font=("Segoe UI", 9)).pack(side=tk.LEFT)
-        else:
-            ttk.Label(footer, text=ffmpeg_text, font=("Segoe UI", 9)).pack(side=tk.LEFT)
-
-        self.version_var = tk.StringVar(value=f"v{__version__}")
-        ttk.Label(footer, textvariable=self.version_var, font=("Segoe UI", 9)).pack(side=tk.RIGHT)
-
-        # Boton tema
-        ttk.Button(footer, text="Tema", command=self._cambiar_tema, width=6).pack(side=tk.RIGHT, padx=(0, 8))
+        self.estado_var = ctk.StringVar(value="Listo")
+        ctk.CTkLabel(prog_frame, textvariable=self.estado_var, font=("Segoe UI", 11),
+                     text_color=COLORS["text_dim"]).grid(row=1, column=0, sticky="w", padx=15, pady=(0, 12))
 
     def _aplicar_preferencias(self):
         self.modo_var.set(self.prefs.get("modo", "audio"))
@@ -357,11 +393,11 @@ class App:
 
     def _actualizar_calidades(self):
         if self.modo_var.get() == "audio":
-            self.calidad_combo["values"] = ("128", "192", "256", "320")
+            self.calidad_option.configure(values=["128", "192", "256", "320"])
             if not self.calidad_var.get() or self.calidad_var.get() not in ("128", "192", "256", "320"):
                 self.calidad_var.set("320")
         else:
-            self.calidad_combo["values"] = ("360p", "480p", "720p", "1080p")
+            self.calidad_option.configure(values=["360p", "480p", "720p", "1080p"])
             if not self.calidad_var.get() or self.calidad_var.get() not in ("360p", "480p", "720p", "1080p"):
                 self.calidad_var.set("720p")
 
@@ -379,45 +415,43 @@ class App:
         if not self.clipboard_auto:
             return
         try:
-            clipboard = self.root.clipboard_get()
-            if clipboard and YOUTUBE_REGEX.search(clipboard) and clipboard != self.url_var.get():
-                self.url_var.set(clipboard)
-        except tk.TclError:
+            clipboard = self.clipboard_get()
+            if clipboard and YOUTUBE_REGEX.search(clipboard) and clipboard != self.url_entry.get():
+                self.url_entry.delete(0, "end")
+                self.url_entry.insert(0, clipboard)
+        except Exception:
             pass
-        self.root.after(2000, self._monitorear_clipboard)
+        self.after(2000, self._monitorear_clipboard)
 
     def _preview_video(self):
-        url = self.url_var.get().strip()
+        url = self.url_entry.get().strip()
         if not url:
             messagebox.showwarning("Advertencia", "Ingresa una URL primero.")
             return
 
-        self.preview_titulo.set("Cargando info del video...")
-        self.preview_info.set("")
-        self.preview_label.set("")
+        self.preview_titulo.configure(text="Cargando info del video...")
+        self.preview_info.configure(text="")
 
         def run():
             data = extraer_info_video(url)
-            self.root.after(0, lambda: self._mostrar_preview(data))
+            self.after(0, lambda: self._mostrar_preview(data))
 
         threading.Thread(target=run, daemon=True).start()
 
     def _mostrar_preview(self, data):
         if data:
             self.preview_data = data
-            self.preview_titulo.set(data["titulo"])
+            self.preview_titulo.configure(text=data["titulo"])
             info_parts = [data["uploader"], data["duracion"]]
             if data.get("es_playlist"):
                 info_parts.insert(0, f"Playlist: {data['num_videos']} videos")
-            self.preview_info.set(" | ".join(info_parts))
-            self.preview_label.set("")
+            self.preview_info.configure(text=" | ".join(info_parts))
         else:
-            self.preview_titulo.set("")
-            self.preview_info.set("")
-            self.preview_label.set("No se pudo obtener info del video.")
+            self.preview_titulo.configure(text="")
+            self.preview_info.configure(text="No se pudo obtener info del video.")
 
     def _agregar_a_cola(self):
-        url = self.url_var.get().strip()
+        url = self.url_entry.get().strip()
         if not url:
             messagebox.showwarning("Advertencia", "Ingresa una URL.")
             return
@@ -433,10 +467,25 @@ class App:
         playlist = self.playlist_var.get()
 
         display_url = url if len(url) <= 60 else url[:57] + "..."
-        item_id = self.cola_tree.insert("", tk.END, values=("Pendiente", display_url,
-                                         "Audio" if modo == "audio" else "Video"))
-        self.descarga_queue.put({
-            "item_id": item_id,
+
+        item_frame = ctk.CTkFrame(self.cola_scroll, fg_color=COLORS["bg3"], corner_radius=8, height=45)
+        item_frame.grid(row=len(self.queue_items), column=0, sticky="ew", pady=3)
+        item_frame.grid_columnconfigure(1, weight=1)
+
+        status_label = ctk.CTkLabel(item_frame, text="Pendiente", font=("Segoe UI", 11, "bold"),
+                                     text_color=COLORS["warning"], width=100)
+        status_label.grid(row=0, column=0, padx=10, pady=8)
+
+        ctk.CTkLabel(item_frame, text=display_url, font=("Segoe UI", 11),
+                     text_color=COLORS["text"], anchor="w").grid(row=0, column=1, sticky="w", padx=5)
+
+        tipo_text = "Audio" if modo == "audio" else "Video"
+        ctk.CTkLabel(item_frame, text=tipo_text, font=("Segoe UI", 10),
+                     text_color=COLORS["text_dim"], width=60).grid(row=0, column=2, padx=10)
+
+        self.queue_items.append({
+            "frame": item_frame,
+            "status_label": status_label,
             "url": url,
             "modo": modo,
             "calidad": calidad,
@@ -445,30 +494,33 @@ class App:
             "playlist": playlist,
         })
 
-        self.url_var.set("")
-        self.preview_titulo.set("")
-        self.preview_info.set("")
-        self.preview_label.set("")
+        self.url_entry.delete(0, "end")
+        self.preview_titulo.configure(text="")
+        self.preview_info.configure(text="")
         self._guardar_prefs_actuales()
 
     def _iniciar_cola(self):
         if self.is_downloading:
             return
-        if self.descarga_queue.empty():
+
+        pending = [item for item in self.queue_items if item["status_label"].cget("text") == "Pendiente"]
+        if not pending:
             messagebox.showinfo("Cola vacía", "Agrega videos a la cola primero.")
             return
-        self.is_downloading = True
-        threading.Thread(target=self._procesar_cola, daemon=True).start()
 
-    def _procesar_cola(self):
-        while not self.descarga_queue.empty():
-            item = self.descarga_queue.get()
-            item_id = item["item_id"]
-            self.root.after(0, lambda i=item_id: self.cola_tree.set(i, "estado", "Descargando..."))
-            self.root.after(0, lambda: self.progress.configure(value=0))
+        self.is_downloading = True
+        threading.Thread(target=self._procesar_cola, args=(pending,), daemon=True).start()
+
+    def _procesar_cola(self, pending):
+        for item in pending:
+            if item["status_label"].cget("text") != "Pendiente":
+                continue
+
+            self.after(0, lambda i=item: i["status_label"].configure(text="Descargando...", text_color=COLORS["accent"]))
+            self.after(0, lambda: self.progress.set(0))
 
             def on_progress(val):
-                self.root.after(0, lambda v=val: self.progress.configure(value=v * 100))
+                self.after(0, lambda v=val: self.progress.set(v))
 
             def on_speed(speed, downloaded, total):
                 if speed > 1024 * 1024:
@@ -478,7 +530,7 @@ class App:
                 else:
                     speed_str = f"{speed:.0f} B/s"
                 pct = (downloaded / total * 100) if total > 0 else 0
-                self.root.after(0, lambda s=speed_str, p=pct: self.estado_var.set(f"Descargando... {s} — {p:.0f}%"))
+                self.after(0, lambda s=speed_str, p=pct: self.estado_var.set(f"Descargando... {s} — {p:.0f}%"))
 
             exito, mensaje = descargar_musica(
                 item["url"],
@@ -492,40 +544,35 @@ class App:
             )
 
             if exito:
-                self.root.after(0, lambda i=item_id: self.cola_tree.set(i, "estado", "Completado"))
+                self.after(0, lambda i=item: i["status_label"].configure(text="Completado", text_color=COLORS["success"]))
                 self.historial.append({"url": item["url"], "fecha": time.strftime("%Y-%m-%d %H:%M")})
             else:
-                self.root.after(0, lambda i=item_id: self.cola_tree.set(i, "estado", "Error"))
-                self.root.after(0, lambda m=mensaje: messagebox.showerror("Error", m))
+                self.after(0, lambda i=item: i["status_label"].configure(text="Error", text_color=COLORS["error"]))
+                self.after(0, lambda m=mensaje: messagebox.showerror("Error", m))
 
-            self.root.after(0, lambda: self.progress.configure(value=100))
-            self.root.after(0, lambda: self.estado_var.set("Listo"))
+            self.after(0, lambda: self.progress.set(1))
+            self.after(0, lambda: self.estado_var.set("Listo"))
 
         self.is_downloading = False
 
     def _limpiar_cola(self):
-        for item in self.cola_tree.get_children():
-            estado = self.cola_tree.set(item, "estado")
-            if estado in ("Completado", "Error"):
-                self.cola_tree.delete(item)
+        for item in self.queue_items[:]:
+            if item["status_label"].cget("text") in ("Completado", "Error"):
+                item["frame"].destroy()
+                self.queue_items.remove(item)
 
     def _cambiar_tema(self):
-        if not HAS_BOOTSTRAP:
-            return
-        temas = ["darkly", "cosmo", "flatly", "journal", "lumen", "minty",
-                 "pulse", "sandstone", "united", "yeti", "morph", "simplex", "cerculean"]
-        tema_actual = self.prefs.get("tema", "darkly")
-        idx = (temas.index(tema_actual) + 1) % len(temas) if tema_actual in temas else 0
-        nuevo_tema = temas[idx]
-        self.root.style.theme_use(nuevo_tema)
-        self.prefs["tema"] = nuevo_tema
+        current = ctk.get_appearance_mode()
+        new_mode = "Light" if current == "Dark" else "Dark"
+        ctk.set_appearance_mode(new_mode)
+        self.prefs["tema"] = new_mode.lower()
         guardar_preferencias(self.prefs)
 
     def _check_update_async(self):
         def run():
             has_update, latest, url = check_for_update(__version__)
             if has_update:
-                self.root.after(0, lambda: self._show_update(latest, url))
+                self.after(0, lambda: self._show_update(latest, url))
         threading.Thread(target=run, daemon=True).start()
 
     def _show_update(self, latest, url):
@@ -539,6 +586,5 @@ class App:
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = App(root)
-    root.mainloop()
+    app = App()
+    app.mainloop()

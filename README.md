@@ -6,8 +6,12 @@
 
 - Descarga audio en formato **mp3** (calidad seleccionable: 128, 192, 256, 320 kbps)
 - Descarga video en formato **mp4** (calidad seleccionable: 360p, 480p, 720p, 1080p)
-- Interfaz gráfica moderna con tema oscuro (ttkbootstrap)
-- Barra de progreso en tiempo real
+- Interfaz gráfica moderna con tema oscuro (CustomTkinter)
+- Cola de descargas múltiples
+- Preview del video antes de descargar
+- Subtítulos y soporte de playlists
+- Detección automática de URLs del clipboard
+- Barra de progreso con velocidad en tiempo real
 - Verificación automática de actualizaciones
 - Compatible con Linux, Windows y macOS
 
@@ -46,7 +50,7 @@ python yt-dowloader.py
 ## Build standalone
 
 ```bash
-pip install pyinstaller yt-dlp ttkbootstrap
+pip install pyinstaller yt-dlp customtkinter
 pyinstaller yt-dowloader.spec
 ```
 
@@ -54,7 +58,7 @@ El ejecutable se genera en `dist/`.
 
 ## Arquitectura
 
-- `yt-dowloader.py` — App completa: interfaz tkinter/ttkbootstrap + lógica de descarga con yt-dlp
+- `yt-dowloader.py` — App completa: interfaz CustomTkinter + lógica de descarga con yt-dlp
 - `yt-dowloader.spec` — Configuración de PyInstaller (multiplataforma)
 - `.github/workflows/build.yml` — CI/CD: build automático para Linux, Windows, macOS
 

@@ -1,17 +1,20 @@
 # -*- mode: python ; coding: utf-8 -*-
 import sys
+import customtkinter
 
 block_cipher = None
+
+ctk_path = customtkinter.__path__[0]
 
 a = Analysis(
     ['yt-dowloader.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[
+        (ctk_path, 'customtkinter'),
+    ],
     hiddenimports=[
-        'ttkbootstrap',
-        'ttkbootstrap.constants',
-        'ttkbootstrap.themes',
+        'customtkinter',
     ],
     hookspath=[],
     hooksconfig={},

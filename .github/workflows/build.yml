@@ -49,7 +49,7 @@ jobs:
           Remove-Item ffmpeg-temp -Recurse -Force
 
       - name: Install Python dependencies
-        run: pip install pyinstaller yt-dlp ttkbootstrap
+        run: pip install pyinstaller yt-dlp customtkinter
 
       - name: Build executable
         run: pyinstaller yt-dowloader.spec
