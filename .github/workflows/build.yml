@@ -18,12 +18,9 @@ jobs:
           - os: windows-latest
             artifact_name: yt-dowloader-windows
             asset_name: yt-dowloader-windows.zip
-          - os: macos-13
-            artifact_name: yt-dowloader-macos-intel
-            asset_name: yt-dowloader-macos-intel.zip
           - os: macos-latest
-            artifact_name: yt-dowloader-macos-arm
-            asset_name: yt-dowloader-macos-arm.zip
+            artifact_name: yt-dowloader-macos
+            asset_name: yt-dowloader-macos.zip
 
     steps:
       - uses: actions/checkout@v4
@@ -44,14 +41,13 @@ jobs:
       - name: Build executable
         run: pyinstaller yt-dowloader.spec
 
-      - name: Smoke test
+      - name: Verify executable exists
         shell: bash
         run: |
           if [ "${{ runner.os }}" == "Windows" ]; then
-            dist/yt-dowloader.exe --help 2>&1 || true
+            ls -lh dist/yt-dowloader.exe
           else
-            chmod +x dist/yt-dowloader
-            dist/yt-dowloader --help 2>&1 || true
+            ls -lh dist/yt-dowloader
           fi
 
       - name: Package (Linux)
