@@ -46,20 +46,6 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install create-dmg
 
-      - name: Download ffmpeg (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
-          Invoke-WebRequest -Uri $ffmpegUrl -OutFile ffmpeg.zip
-          Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg-temp
-          $zipDir = Get-ChildItem -Path ffmpeg-temp -Directory | Select-Object -First 1
-          New-Item -ItemType Directory -Force -Path dist/yt-dowloader
-          Copy-Item "$($zipDir.FullName)/bin/ffmpeg.exe" -Destination dist/yt-dowloader/
-          Copy-Item "$($zipDir.FullName)/bin/ffprobe.exe" -Destination dist/yt-dowloader/
-          Remove-Item ffmpeg.zip
-          Remove-Item ffmpeg-temp -Recurse -Force
-
       - name: Install Python dependencies
         run: pip install pyinstaller yt-dlp customtkinter
 
@@ -71,9 +57,26 @@ jobs:
         run: |
           if [ "${{ runner.os }}" == "Windows" ]; then
             ls -lh dist/yt-dowloader/yt-dowloader.exe
+          elif [ "${{ runner.os }}" == "macOS" ]; then
+            ls -lh dist/yt-dowloader/yt-dowloader
           else
             ls -lh dist/yt-dowloader/yt-dowloader
           fi
+
+      - name: Bundle ffmpeg (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+          Invoke-WebRequest -Uri $ffmpegUrl -OutFile ffmpeg.zip
+          Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg-temp
+          $zipDir = Get-ChildItem -Path ffmpeg-temp -Directory | Select-Object -First 1
+          Copy-Item "$($zipDir.FullName)/bin/ffmpeg.exe" -Destination dist/yt-dowloader/
+          Copy-Item "$($zipDir.FullName)/bin/ffprobe.exe" -Destination dist/yt-dowloader/
+          Remove-Item ffmpeg.zip
+          Remove-Item ffmpeg-temp -Recurse -Force
+          Write-Host "ffmpeg bundled:"
+          ls -lh dist/yt-dowloader/ffmpeg.exe
 
       # --- Windows: Installer + Portable ---
       - name: Build Windows installer (NSIS)
@@ -94,7 +97,8 @@ jobs:
           cp -r dist/yt-dowloader/* "$PKG_DIR/opt/yt-dowloader/"
           mkdir -p "$PKG_DIR/DEBIAN"
           sed "s/Version: .*/Version: ${GITHUB_REF_NAME#v}/" packaging/linux/DEBIAN/control > "$PKG_DIR/DEBIAN/control"
-          cp packaging/linux/yt-dowloader.desktop "$PKG_DIR/usr/share/applications/" 2>/dev/null || true
+          mkdir -p "$PKG_DIR/usr/share/applications"
+          cp packaging/linux/yt-dowloader.desktop "$PKG_DIR/usr/share/applications/"
           dpkg-deb --build "$PKG_DIR" "${{ matrix.asset_installer }}"
 
       - name: Package Linux portable
@@ -102,12 +106,38 @@ jobs:
         run: tar -czf ${{ matrix.asset_portable }} -C dist/yt-dowloader .
 
       # --- macOS: .dmg + Portable ---
-      - name: Build macOS .dmg
+      - name: Build macOS .app bundle + .dmg
         if: runner.os == 'macOS'
+        shell: bash
         run: |
-          mkdir -p dmg-staging
-          cp -r dist/yt-dowloader/yt-dowloader.app dmg-staging/ || \
-          cp -r dist/yt-dowloader/ dmg-staging/yt-dowloader.app
+          APP_DIR="dmg-staging/YT-DownLoader.app/Contents"
+          mkdir -p "$APP_DIR/MacOS"
+          mkdir -p "$APP_DIR/Resources"
+          cp dist/yt-dowloader/yt-dowloader "$APP_DIR/MacOS/yt-dowloader"
+          cat > "$APP_DIR/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key>
+            <string>YT-DownLoader</string>
+            <key>CFBundleDisplayName</key>
+            <string>YT-DownLoader</string>
+            <key>CFBundleIdentifier</key>
+            <string>com.rafaelreyes.yt-dowloader</string>
+            <key>CFBundleVersion</key>
+            <string>${GITHUB_REF_NAME#v}</string>
+            <key>CFBundleShortVersionString</key>
+            <string>${GITHUB_REF_NAME#v}</string>
+            <key>CFBundleExecutable</key>
+            <string>yt-dowloader</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+            <key>NSHighResolutionCapable</key>
+            <true/>
+          </dict>
+          </plist>
+          PLIST
           create-dmg \
             --volname "YT-DownLoader" \
             --window-pos 200 120 \
@@ -119,7 +149,9 @@ jobs:
 
       - name: Package macOS portable
         if: runner.os == 'macOS'
-        run: zip -r ${{ matrix.asset_portable }} -j dist/yt-dowloader/
+        run: |
+          cd dmg-staging
+          zip -r "../${{ matrix.asset_portable }}" "YT-DownLoader.app"
 
       # --- Upload ---
       - name: Upload portable artifact
