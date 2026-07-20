@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=YT-DownLoader
+GenericName=Video Downloader
+Comment=Descarga videos de YouTube, Instagram, TikTok y Facebook
+Exec=/opt/yt-dowloader/yt-dowloader
+Icon=yt-dowloader
+Terminal=false
+Type=Application
+Categories=AudioVideo;Audio;Utility;
+Keywords=youtube;instagram;tiktok;facebook;download;video;audio;

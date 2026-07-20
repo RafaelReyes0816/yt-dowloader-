@@ -1,0 +1,10 @@
+Package: yt-dowloader
+Version: 2.1.0
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: Rafael Reyes <rafael@jaeger.dev>
+Description: YouTube video/audio downloader
+ YT-DownLoader descarga audio (mp3) o video (mp4) de YouTube, Instagram,
+ TikTok y Facebook con seleccion de calidad y cola de descargas multiple.
+ Soporte para subtítulos y playlists en YouTube.

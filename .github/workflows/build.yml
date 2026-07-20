@@ -14,13 +14,16 @@ jobs:
         include:
           - os: ubuntu-22.04
             artifact_name: yt-dowloader-linux
-            asset_name: yt-dowloader-linux.tar.gz
+            asset_portable: yt-dowloader-linux.tar.gz
+            asset_installer: yt-dowloader-linux.deb
           - os: windows-latest
             artifact_name: yt-dowloader-windows
-            asset_name: yt-dowloader-windows.zip
+            asset_portable: yt-dowloader-windows-portable.zip
+            asset_installer: YT-DownLoader-Jaeger-Setup.exe
           - os: macos-latest
             artifact_name: yt-dowloader-macos
-            asset_name: yt-dowloader-macos.zip
+            asset_portable: yt-dowloader-macos.zip
+            asset_installer: yt-dowloader-macos.dmg
 
     steps:
       - uses: actions/checkout@v4
@@ -35,6 +38,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y python3-tk
 
+      - name: Install NSIS (Windows)
+        if: runner.os == 'Windows'
+        uses: negrutiu/nsis-install@v3
+
+      - name: Install create-dmg (macOS)
+        if: runner.os == 'macOS'
+        run: brew install create-dmg
+
       - name: Download ffmpeg (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -43,8 +54,9 @@ jobs:
           Invoke-WebRequest -Uri $ffmpegUrl -OutFile ffmpeg.zip
           Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg-temp
           $zipDir = Get-ChildItem -Path ffmpeg-temp -Directory | Select-Object -First 1
-          Copy-Item "$($zipDir.FullName)/bin/ffmpeg.exe" -Destination dist/
-          Copy-Item "$($zipDir.FullName)/bin/ffprobe.exe" -Destination dist/
+          New-Item -ItemType Directory -Force -Path dist/yt-dowloader
+          Copy-Item "$($zipDir.FullName)/bin/ffmpeg.exe" -Destination dist/yt-dowloader/
+          Copy-Item "$($zipDir.FullName)/bin/ffprobe.exe" -Destination dist/yt-dowloader/
           Remove-Item ffmpeg.zip
           Remove-Item ffmpeg-temp -Recurse -Force
 
@@ -54,34 +66,73 @@ jobs:
       - name: Build executable
         run: pyinstaller yt-dowloader.spec
 
-      - name: Verify executable exists
+      - name: Verify build output
         shell: bash
         run: |
           if [ "${{ runner.os }}" == "Windows" ]; then
-            ls -lh dist/yt-dowloader.exe
-            ls -lh dist/ffmpeg.exe
+            ls -lh dist/yt-dowloader/yt-dowloader.exe
           else
-            ls -lh dist/yt-dowloader
+            ls -lh dist/yt-dowloader/yt-dowloader
           fi
 
-      - name: Package (Linux)
-        if: runner.os == 'Linux'
-        run: tar -czf ${{ matrix.asset_name }} -C dist .
+      # --- Windows: Installer + Portable ---
+      - name: Build Windows installer (NSIS)
+        if: runner.os == 'Windows'
+        run: makensis installer.nsi
 
-      - name: Package (Windows)
+      - name: Package Windows portable
         if: runner.os == 'Windows'
         shell: pwsh
-        run: Compress-Archive -Path dist/* -DestinationPath ${{ matrix.asset_name }}
+        run: Compress-Archive -Path dist/yt-dowloader/* -DestinationPath ${{ matrix.asset_portable }}
 
-      - name: Package (macOS)
+      # --- Linux: .deb + Portable ---
+      - name: Build Linux .deb package
+        if: runner.os == 'Linux'
+        run: |
+          PKG_DIR="packaging/tmp"
+          mkdir -p "$PKG_DIR/opt/yt-dowloader"
+          cp -r dist/yt-dowloader/* "$PKG_DIR/opt/yt-dowloader/"
+          mkdir -p "$PKG_DIR/DEBIAN"
+          sed "s/Version: .*/Version: ${GITHUB_REF_NAME#v}/" packaging/linux/DEBIAN/control > "$PKG_DIR/DEBIAN/control"
+          cp packaging/linux/yt-dowloader.desktop "$PKG_DIR/usr/share/applications/" 2>/dev/null || true
+          dpkg-deb --build "$PKG_DIR" "${{ matrix.asset_installer }}"
+
+      - name: Package Linux portable
+        if: runner.os == 'Linux'
+        run: tar -czf ${{ matrix.asset_portable }} -C dist/yt-dowloader .
+
+      # --- macOS: .dmg + Portable ---
+      - name: Build macOS .dmg
         if: runner.os == 'macOS'
-        run: zip -r ${{ matrix.asset_name }} -j dist/
+        run: |
+          mkdir -p dmg-staging
+          cp -r dist/yt-dowloader/yt-dowloader.app dmg-staging/ || \
+          cp -r dist/yt-dowloader/ dmg-staging/yt-dowloader.app
+          create-dmg \
+            --volname "YT-DownLoader" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --app-drop-link 450 200 \
+            "${{ matrix.asset_installer }}" \
+            "dmg-staging/" || true
 
-      - name: Upload artifact
+      - name: Package macOS portable
+        if: runner.os == 'macOS'
+        run: zip -r ${{ matrix.asset_portable }} -j dist/yt-dowloader/
+
+      # --- Upload ---
+      - name: Upload portable artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.asset_name }}
+          name: ${{ matrix.artifact_name }}-portable
+          path: ${{ matrix.asset_portable }}
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}-installer
+          path: ${{ matrix.asset_installer }}
 
   release:
     needs: build
@@ -95,6 +146,9 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
