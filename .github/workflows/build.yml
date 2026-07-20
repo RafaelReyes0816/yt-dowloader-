@@ -75,8 +75,7 @@ jobs:
           Copy-Item "$($zipDir.FullName)/bin/ffprobe.exe" -Destination dist/yt-dowloader/
           Remove-Item ffmpeg.zip
           Remove-Item ffmpeg-temp -Recurse -Force
-          Write-Host "ffmpeg bundled:"
-          ls -lh dist/yt-dowloader/ffmpeg.exe
+          Get-ChildItem dist/yt-dowloader/ffmpeg.exe, dist/yt-dowloader/ffprobe.exe
 
       # --- Windows: Installer + Portable ---
       - name: Build Windows installer (NSIS)
