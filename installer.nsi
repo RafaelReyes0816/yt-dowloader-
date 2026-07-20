@@ -56,7 +56,7 @@ Section "Instalar"
     "NoRepair" 1
 SectionEnd
 
-Section "Desinstalar"
+Section "Uninstall"
   Delete "$DESKTOP\YT-DownLoader.lnk"
   RMDir /r "$SMPROGRAMS\YT-DownLoader"
   RMDir /r "$INSTDIR"
