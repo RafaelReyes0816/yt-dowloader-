@@ -445,9 +445,13 @@ class App(ctk.CTk):
             else:
                 icon_path = os.path.join(base, "assets", "icons", "icon.png")
                 if os.path.exists(icon_path):
+                    from PIL import Image as PILImage
                     from tkinter import PhotoImage
-                    self._tk_icon = PhotoImage(file=icon_path)
+                    img = PILImage.open(icon_path).resize((64, 64), PILImage.LANCZOS)
+                    self._tk_icon = PhotoImage(img)
                     self.iconphoto(True, self._tk_icon)
+                self.tk.call('wm', 'iconname', self._w, 'YT-DownLoader')
+                self.wm_class("YT-DownLoader", "YT-DownLoader")
         except Exception:
             pass
 

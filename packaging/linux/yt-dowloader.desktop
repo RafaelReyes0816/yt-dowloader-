@@ -6,5 +6,6 @@ Exec=/opt/yt-dowloader/yt-dowloader
 Icon=yt-dowloader
 Terminal=false
 Type=Application
+StartupWMClass=YT-DownLoader
 Categories=AudioVideo;Audio;Utility;
 Keywords=youtube;instagram;tiktok;facebook;download;video;audio;
