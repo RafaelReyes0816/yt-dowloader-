@@ -41,6 +41,7 @@ exe = EXE(
     argv_emulation=False,
     codesign_identity=None,
     entitlements_file=None,
+    icon='assets/icons/icon.ico',
 )
 
 coll = COLLECT(

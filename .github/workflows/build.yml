@@ -47,7 +47,7 @@ jobs:
         run: brew install create-dmg
 
       - name: Install Python dependencies
-        run: pip install pyinstaller yt-dlp customtkinter
+        run: pip install pyinstaller yt-dlp customtkinter Pillow
 
       - name: Build executable
         run: pyinstaller yt-dowloader.spec
@@ -98,6 +98,8 @@ jobs:
           sed "s/Version: .*/Version: ${GITHUB_REF_NAME#v}/" packaging/linux/DEBIAN/control > "$PKG_DIR/DEBIAN/control"
           mkdir -p "$PKG_DIR/usr/share/applications"
           cp packaging/linux/yt-dowloader.desktop "$PKG_DIR/usr/share/applications/"
+          mkdir -p "$PKG_DIR/usr/share/icons/hicolor/512x512/apps"
+          cp assets/icons/icon.png "$PKG_DIR/usr/share/icons/hicolor/512x512/apps/yt-dowloader.png"
           dpkg-deb --build "$PKG_DIR" "${{ matrix.asset_installer }}"
 
       - name: Package Linux portable
@@ -109,10 +111,17 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
+          python -c "
+          from PIL import Image
+          img = Image.open('assets/icons/icon.png')
+          img.save('assets/icons/icon.icns', format='ICNS')
+          print('ICNS generated')
+          "
           APP_DIR="dmg-staging/YT-DownLoader.app/Contents"
           mkdir -p "$APP_DIR/MacOS"
           mkdir -p "$APP_DIR/Resources"
           cp dist/yt-dowloader/yt-dowloader "$APP_DIR/MacOS/yt-dowloader"
+          cp assets/icons/icon.icns "$APP_DIR/Resources/AppIcon.icns"
           cat > "$APP_DIR/Info.plist" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -132,6 +141,8 @@ jobs:
             <string>yt-dowloader</string>
             <key>CFBundlePackageType</key>
             <string>APPL</string>
+            <key>CFBundleIconFile</key>
+            <string>AppIcon</string>
             <key>NSHighResolutionCapable</key>
             <true/>
           </dict>

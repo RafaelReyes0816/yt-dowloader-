@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-__version__ = "2.1.2"
+__version__ = "2.1.3"
 
 import yt_dlp
 import os
@@ -418,6 +418,8 @@ class App(ctk.CTk):
         self.resizable(True, True)
         self.configure(fg_color=COLORS["bg.base"])
 
+        self._set_window_icon()
+
         ctk.set_appearance_mode("dark")
 
         self.prefs = cargar_preferencias()
@@ -432,6 +434,22 @@ class App(ctk.CTk):
         self._check_update_async()
         if self.clipboard_auto:
             self._monitorear_clipboard()
+
+    def _set_window_icon(self):
+        try:
+            base = os.path.dirname(os.path.abspath(__file__))
+            if sys.platform == "win32":
+                icon_path = os.path.join(base, "assets", "icons", "icon.ico")
+                if os.path.exists(icon_path):
+                    self.iconbitmap(icon_path)
+            else:
+                icon_path = os.path.join(base, "assets", "icons", "icon.png")
+                if os.path.exists(icon_path):
+                    from tkinter import PhotoImage
+                    self._tk_icon = PhotoImage(file=icon_path)
+                    self.iconphoto(True, self._tk_icon)
+        except Exception:
+            pass
 
     def _build_ui(self):
         self.grid_columnconfigure(0, weight=1)

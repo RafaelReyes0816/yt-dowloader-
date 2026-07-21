@@ -11,8 +11,8 @@ RequestExecutionLevel admin
 
 ; --- Interface Settings ---
 !define MUI_ABORTWARNING
-!define MUI_ICON "${NSISDIR}\Contrib\Graphics\Icons\modern-install.ico"
-!define MUI_UNICON "${NSISDIR}\Contrib\Graphics\Icons\modern-uninstall.ico"
+!define MUI_ICON "assets\icons\icon.ico"
+!define MUI_UNICON "assets\icons\icon.ico"
 
 ; --- Pages ---
 !insertmacro MUI_PAGE_DIRECTORY
@@ -47,7 +47,7 @@ Section "Instalar"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\YT-DownLoader" \
     "InstallLocation" "$INSTDIR"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\YT-DownLoader" \
-    "DisplayVersion" "2.1.2"
+    "DisplayVersion" "2.1.3"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\YT-DownLoader" \
     "Publisher" "Rafael Reyes"
   WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\YT-DownLoader" \
