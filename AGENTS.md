@@ -35,6 +35,7 @@ git push origin v1.0.0
 ## Architecture
 
 - `yt-dowloader.py` — entire app: `App` class handles CustomTkinter UI, `descargar_musica()` handles download logic with yt-dlp progress hooks. `Mi_musica/` folder is created at runtime as download target. `check_for_update()` queries GitHub Releases API.
+- Auth support (v2.2+): `ClasificadorErrores` maps yt-dlp errors / `availability` field to friendly Spanish messages + suggestions; `detectar_navegadores()` + `construir_opciones_cookies()` enable optional browser-session downloads (`cookiesfrombrowser`); `verificar_url()` runs a pre-download restriction check; `VentanaDiagnostico` is the modal diagnostics window. Prefs `usar_sesion_navegador` / `navegador` persist the auth config. No credentials are ever stored.
 - `yt-dowloader.spec` — PyInstaller build config (multiplatform, includes CustomTkinter data files).
 - `.github/workflows/build.yml` — CI/CD for 3 platforms.
 - `requirements.txt` — `yt-dlp`, `customtkinter`, `pyinstaller`.
