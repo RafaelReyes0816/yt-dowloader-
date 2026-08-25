@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-__version__ = "2.2.0"
+__version__ = "2.2.1"
 
 import yt_dlp
 import os
@@ -10,6 +10,7 @@ import math
 import time
 import shutil
 import queue
+import subprocess
 import tkinter
 import threading
 import urllib.request
@@ -94,6 +95,10 @@ TIPOS_BLOQUEANTES = {
     "unavailable", "not_found", "cookies", "bot",
 }
 
+TIPOS_REINTENTO_SESION = {"private", "members_only", "age_restricted", "sign_in", "cookies", "bot"}
+
+ORDEN_NAVEGADORES = ["firefox", "chrome", "brave", "edge"]
+
 NAVEGADORES_RUTAS = {
     "chrome": {
         "win32": [os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "User Data")],
@@ -134,14 +139,19 @@ def construir_opciones_cookies(navegador):
 
 class ClasificadorErrores:
     PATRONES = [
-        ("private", r"private video|video is private|this video is private"),
-        ("members_only", r"members only|members-only|member-only|member only|subscriber only|subscribers only"),
-        ("age_restricted", r"age restricted|age-restricted|confirm your age|verify your age|sign in to confirm your age"),
-        ("unavailable", r"video unavailable|no longer available|has been removed|has been deleted|video no disponible|ya no esta disponible"),
-        ("geo", r"not available in your country|geo-restricted|blocked in your country|unavailable in your region|unavailable in your country"),
-        ("bot", r"confirm you('re| are) not a bot|unusual traffic|bot check|bot verification|not a bot"),
-        ("sign_in", r"sign in|log in|loggin|login|requires authentication|must be logged"),
-        ("cookies", r"cookie|could not extract cookies|keyring|session expired"),
+        ("members_only", r"members[- ]only|member[- ]only|subscribers?[- ]only"),
+        ("age_restricted", r"age[- ]restricted|confirm your age|verify your age"),
+        ("bot", r"not a bot|bot check|bot verification|unusual traffic|request complete verification|rate limit|too many requests"),
+        ("cookies", r"could not extract cookies|session expired|keyring"),
+        ("sign_in", r"granted access|requires authentication|must be logged|login required|log ?in required"),
+        ("geo", r"not available in your country|geo-?restricted|blocked in your country|unavailable in your (region|country)"),
+        ("sign_in", r"\b(sign in|log ?in|loggin)\b"),
+        ("unavailable", r"video unavailable|no longer available|has been removed|has been deleted|content is not available|ya no esta disponible|no esta disponible"),
+        ("private", r"private video|video is private|this video is private|account is private|private account"),
+        ("extractor", r"unable to extract|nsig|signature extraction|no video formats|did not get a match|failed to resolve|precondition check failed"),
+        ("formato", r"requested format is not available"),
+        ("http", r"http error 403|http error 429|forbidden"),
+        ("red", r"urlerror|urlopen error|connection|getaddrinfo|temporary failure|timed? ?out|ssl|reset by peer|name or service not known"),
         ("invalid_url", r"is not a valid url|invalid url|unsupported url|not a valid"),
         ("ffmpeg", r"ffmpeg|postprocessing"),
         ("not_found", r"video not found|no such video|404|not found"),
@@ -197,6 +207,13 @@ class ClasificadorErrores:
         "cookies": "No se pudieron usar las cookies del navegador.",
         "invalid_url": "La URL no es valida. Verifica el enlace.",
         "not_found": "No se encontro el contenido.",
+        "extractor": (
+            "El motor de descarga (yt-dlp) esta desactualizado para los cambios recientes "
+            "de la plataforma."
+        ),
+        "formato": "No se encontro un formato compatible con la version actual del motor de descarga.",
+        "http": "La plataforma rechazo o limito la peticion (HTTP 403/429).",
+        "red": "Problema de red al conectar con la plataforma.",
         "ffmpeg": (
             "Necesitas instalar ffmpeg para descargar este video.\n\n"
             "Windows: descargalo de ffmpeg.org\n"
@@ -214,6 +231,10 @@ class ClasificadorErrores:
         "bot": "Espera unos minutos y vuelve a intentarlo.",
         "cookies": "Abre el navegador, inicia sesion en la plataforma y reintenta. Si el navegador esta en uso, cierra su gestor de contrasenas.",
         "not_found": "Verifica que la URL este completa y sea correcta.",
+        "extractor": "Actualiza yt-dlp desde el Diagnostico o ejecuta: python -m pip install -U yt-dlp",
+        "formato": "Actualiza yt-dlp e intenta de nuevo; tambien puedes cambiar la calidad seleccionada.",
+        "http": "Activa 'Usar sesion del navegador' y reintenta; si persiste, espera unos minutos.",
+        "red": "Verifica tu conexion a internet e intenta de nuevo.",
     }
 
     AVAILABILITY_MAP = {
@@ -235,18 +256,24 @@ class ClasificadorErrores:
 
     @classmethod
     def clasificar(cls, exc, plataforma):
-        msg = str(exc).lower()
+        texto = str(exc)
+        msg = texto.lower()
+        detalle = texto.strip()
+        if len(detalle) > 400:
+            detalle = detalle[:400] + "..."
         for tipo, patron in cls.PATRONES:
             if re.search(patron, msg):
                 return {
                     "tipo": tipo,
                     "mensaje": cls._mensaje(tipo, plataforma),
                     "sugerencia": cls.SUGERENCIAS.get(tipo),
+                    "detalle": detalle,
                 }
         return {
             "tipo": "desconocido",
             "mensaje": "No se pudo descargar el video. Verifica que la URL sea correcta y que el video este publico.",
             "sugerencia": None,
+            "detalle": detalle,
         }
 
     @classmethod
@@ -258,6 +285,7 @@ class ClasificadorErrores:
             "tipo": tipo,
             "mensaje": cls._mensaje(tipo, plataforma),
             "sugerencia": cls.SUGERENCIAS.get(tipo),
+            "detalle": "",
         }
 
 
@@ -416,7 +444,7 @@ def descargar_musica(url, carpeta, modo, calidad, subtitulos=False, playlist=Fal
 
         with yt_dlp.YoutubeDL(opciones) as ydl:
             ydl.download([url])
-        return True, "Descarga completada"
+        return True, "Descarga completada", None
 
     except yt_dlp.utils.DownloadError as e:
         clasificado = ClasificadorErrores.clasificar(e, plataforma)
@@ -424,9 +452,12 @@ def descargar_musica(url, carpeta, modo, calidad, subtitulos=False, playlist=Fal
         sugerencia = clasificado.get("sugerencia")
         if sugerencia:
             mensaje += "\n\nSugerencia:\n" + sugerencia
-        return False, mensaje
+        detalle = (clasificado.get("detalle") or "").strip()
+        if detalle:
+            mensaje += "\n\nDetalle tecnico:\n" + detalle
+        return False, mensaje, clasificado.get("tipo")
     except Exception:
-        return False, "Ocurrio un error inesperado. Si persiste, intenta con otra URL o reinicia la app."
+        return False, "Ocurrio un error inesperado. Si persiste, intenta con otra URL o reinicia la app.", None
 
 
 def check_for_update(current_version):
@@ -441,6 +472,34 @@ def check_for_update(current_version):
         return False, current_version, ""
     except Exception:
         return False, current_version, ""
+
+
+def obtener_ultima_version_ytdlp():
+    try:
+        req = urllib.request.Request(
+            "https://pypi.org/pypi/yt-dlp/json",
+            headers={"Accept": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read())
+        return (data.get("info") or {}).get("version", "")
+    except Exception:
+        return ""
+
+
+def comparar_versiones(v1, v2):
+    def clave(v):
+        partes = []
+        for x in str(v).split("."):
+            try:
+                partes.append(int(x))
+            except ValueError:
+                break
+        return tuple(partes)
+    k1, k2 = clave(v1), clave(v2)
+    if not k1 or not k2:
+        return 0
+    return (k1 > k2) - (k1 < k2)
 
 
 class SegmentedControl(ctk.CTkFrame):
@@ -592,7 +651,7 @@ class VentanaDiagnostico(ctk.CTkToplevel):
     def __init__(self, master, url="", navegador=""):
         super().__init__(master)
         self.title("Diagnostico")
-        self.geometry("500x440")
+        self.geometry("520x500")
         self.resizable(False, False)
         self.transient(master)
         self.url = url.strip()
@@ -621,8 +680,17 @@ class VentanaDiagnostico(ctk.CTkToplevel):
 
         self.detail_label = ctk.CTkLabel(frame, text="", font=FONTS["small"],
                                          text_color=COLORS["text.secondary"], justify="left",
-                                         wraplength=450, anchor="w")
+                                         wraplength=470, anchor="w")
         self.detail_label.pack(fill="x", padx=15, pady=(10, 4))
+
+        self.btn_actualizar_ytdlp = ctk.CTkButton(
+            frame, text="Actualizar motor yt-dlp", height=32,
+            font=FONTS["small_bold"],
+            fg_color=COLORS["accent.progress"],
+            hover_color="#E09A3E",
+            text_color="#1A1207",
+            command=self._actualizar_motor,
+        )
 
     def _crear_check(self, titulo):
         row = ctk.CTkFrame(self.checks_list, fg_color="transparent")
@@ -652,11 +720,15 @@ class VentanaDiagnostico(ctk.CTkToplevel):
 
         try:
             version = yt_dlp.version.__version__
-            has_update, latest, _ = check_for_update(__version__)
-            if has_update:
-                self._set("ytdlp", f"v{version} · hay v{latest}", COLORS["accent.progress"])
-            else:
+            latest = obtener_ultima_version_ytdlp()
+            if latest and comparar_versiones(latest, version) > 0:
+                self._set("ytdlp", f"DESACTUALIZADO · v{version} · hay v{latest}",
+                          COLORS["accent.error"])
+                self.after(0, lambda: self.btn_actualizar_ytdlp.pack(fill="x", padx=15, pady=(8, 0)))
+            elif latest:
                 self._set("ytdlp", f"v{version} · actualizado", COLORS["accent.success"])
+            else:
+                self._set("ytdlp", f"v{version}", COLORS["text.secondary"])
         except Exception:
             self._set("ytdlp", "ERROR · no disponible", COLORS["accent.error"])
 
@@ -678,11 +750,57 @@ class VentanaDiagnostico(ctk.CTkToplevel):
             sugerencia = restriccion.get("sugerencia")
             if sugerencia:
                 texto += "\n\nSugerencia: " + sugerencia
+            detalle = (restriccion.get("detalle") or "").strip()
+            if detalle:
+                texto += "\n\nDetalle tecnico:\n" + detalle
             self.after(0, lambda t=texto: self.detail_label.configure(text=t))
         elif resultado.get("info"):
             self._set("acceso", "OK · acceso publico", COLORS["accent.success"])
         else:
             self._set("acceso", "Sin datos", COLORS["text.secondary"])
+
+    def _actualizar_motor(self):
+        if getattr(sys, "frozen", False):
+            messagebox.showinfo(
+                "Actualizar motor yt-dlp",
+                "Esta version empaquetada usa yt-dlp fijo.\n\n"
+                "Descarga la ultima version de la aplicacion desde GitHub Releases.",
+            )
+            import webbrowser
+            webbrowser.open(f"https://github.com/{GITHUB_REPO}/releases/latest")
+            return
+        try:
+            self.btn_actualizar_ytdlp.configure(state="disabled")
+        except Exception:
+            pass
+        self._set("ytdlp", "Actualizando yt-dlp...", COLORS["accent.progress"])
+        threading.Thread(target=self._actualizar_motor_hilo, daemon=True).start()
+
+    def _actualizar_motor_hilo(self):
+        proc = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--upgrade", "yt-dlp"],
+            capture_output=True, text=True,
+        )
+        try:
+            from importlib.metadata import version as version_paquete
+            instalada = version_paquete("yt-dlp")
+        except Exception:
+            instalada = ""
+        if proc.returncode == 0 and instalada:
+            self._set("ytdlp", f"v{instalada} · actualizado, reinicia la app",
+                      COLORS["accent.success"])
+            self.after(0, lambda v=instalada: messagebox.showinfo(
+                "Motor actualizado",
+                f"yt-dlp se actualizo a la v{v}.\n\nReinicia la aplicacion para aplicar los cambios.",
+            ))
+        else:
+            self._set("ytdlp", "ERROR · fallo la actualizacion", COLORS["accent.error"])
+            detalle = (proc.stderr or proc.stdout or "").strip()[-400:]
+            self.after(0, lambda d=detalle: messagebox.showerror(
+                "No se pudo actualizar",
+                f"Fallo pip upgrade.\n\nDetalle tecnico:\n{d}",
+            ))
+        self.after(0, lambda: self.btn_actualizar_ytdlp.configure(state="normal"))
 
 
 class App(ctk.CTk):
@@ -976,6 +1094,16 @@ class App(ctk.CTk):
         state = "normal" if (self.usar_sesion_var.get() and self.navegadores) else "disabled"
         self.navegador_option.configure(state=state)
 
+    def _elegir_navegador_sesion(self):
+        detectados = set(detectar_navegadores())
+        pref = self.prefs.get("navegador", "")
+        if pref in detectados:
+            return pref
+        for nav in ORDEN_NAVEGADORES:
+            if nav in detectados:
+                return nav
+        return ""
+
     def _actualizar_calidades(self):
         if self.modo_var.get().startswith("Audio"):
             self.calidad_option.configure(values=["128", "192", "256", "320"])
@@ -1042,8 +1170,8 @@ class App(ctk.CTk):
             return
 
         if not PLATFORM_REGEX.search(url):
-            messagebox.showwarning("URL no兼容ible",
-                                    "Esta URL no es de una plataforma兼容ible.\n\n"
+            messagebox.showwarning("URL no compatible",
+                                    "Esta URL no es de una plataforma compatible.\n\n"
                                     "Plataformas: YouTube, Instagram, TikTok, Facebook.")
             return
 
@@ -1084,22 +1212,21 @@ class App(ctk.CTk):
             messagebox.showinfo("Cola vacia", "Agrega videos a la cola primero.")
             return
 
+        nav_sesion = self._navegador_seleccionado()
         self.is_downloading = True
-        threading.Thread(target=self._procesar_cola, args=(pending,), daemon=True).start()
+        threading.Thread(target=self._procesar_cola, args=(pending, nav_sesion), daemon=True).start()
 
-    def _procesar_cola(self, pending):
+    def _procesar_cola(self, pending, navegador_actual):
         total = len(pending)
         for idx, item in enumerate(pending):
             if item["card"].status_label.cget("text") != "Pendiente":
                 continue
 
-            navegador = item.get("navegador", "")
-
             self.after(0, lambda i=item: i["card"].set_status("Verificando...", COLORS["accent.progress"]))
             self.after(0, lambda: self.estado_var.set(f"Verificando {idx + 1} de {total}..."))
             self.after(0, self._actualizar_counter)
 
-            precheck = verificar_url(item["url"], navegador)
+            precheck = verificar_url(item["url"], navegador_actual)
             restriccion = precheck.get("restriccion")
             if restriccion and restriccion.get("tipo") in TIPOS_BLOQUEANTES:
                 mensaje = restriccion["mensaje"]
@@ -1128,7 +1255,7 @@ class App(ctk.CTk):
                     speed_str = f"{speed:.0f} B/s"
                 self.after(0, lambda s=speed_str: self.estado_var.set(f"Descargando {idx + 1} de {total}... {s}"))
 
-            exito, mensaje = descargar_musica(
+            exito, mensaje, tipo_fallo = descargar_musica(
                 item["url"],
                 item["carpeta"],
                 item["modo"],
@@ -1137,8 +1264,25 @@ class App(ctk.CTk):
                 playlist=item["playlist"],
                 progress_callback=on_progress,
                 speed_callback=on_speed,
-                navegador=navegador,
+                navegador=navegador_actual,
             )
+
+            if not exito and tipo_fallo in TIPOS_REINTENTO_SESION and not navegador_actual:
+                nav = self._elegir_navegador_sesion()
+                if nav:
+                    self.after(0, lambda i=item: i["card"].set_status("Reintentando con sesion...", COLORS["accent.progress"]))
+                    self.after(0, lambda n=nav: self.estado_var.set(f"Reintentando {idx + 1} de {total} con sesion de {n.capitalize()}..."))
+                    exito, mensaje, tipo_fallo = descargar_musica(
+                        item["url"],
+                        item["carpeta"],
+                        item["modo"],
+                        item["calidad"],
+                        subtitulos=item["subtitulos"],
+                        playlist=item["playlist"],
+                        progress_callback=on_progress,
+                        speed_callback=on_speed,
+                        navegador=nav,
+                    )
 
             if exito:
                 self.after(0, lambda i=item: i["card"].set_status("Completado", COLORS["accent.success"]))

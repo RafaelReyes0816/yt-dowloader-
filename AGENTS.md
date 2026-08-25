@@ -36,6 +36,9 @@ git push origin v1.0.0
 
 - `yt-dowloader.py` — entire app: `App` class handles CustomTkinter UI, `descargar_musica()` handles download logic with yt-dlp progress hooks. `Mi_musica/` folder is created at runtime as download target. `check_for_update()` queries GitHub Releases API.
 - Auth support (v2.2+): `ClasificadorErrores` maps yt-dlp errors / `availability` field to friendly Spanish messages + suggestions; `detectar_navegadores()` + `construir_opciones_cookies()` enable optional browser-session downloads (`cookiesfrombrowser`); `verificar_url()` runs a pre-download restriction check; `VentanaDiagnostico` is the modal diagnostics window. Prefs `usar_sesion_navegador` / `navegador` persist the auth config. No credentials are ever stored.
+- Auth auto-retry (v2.2.1+): when a download fails with `private`/`sign_in`/`bot`/`age_restricted`/`members_only`/`cookies` error and session is disabled, the app retries automatically once with the first detected browser (order: Firefox > Chrome > Brave > Edge) unless the user has explicitly enabled session.
+- Diagnostic PyPI check (v2.2.1+): `obtener_ultima_version_ytdlp()` queries PyPI to compare installed yt-dlp version against the latest; shows DESACTUALIZADO in red with an "Actualizar motor yt-dlp" button that runs `pip install -U yt-dlp` (or opens GitHub Releases for frozen builds). The old behavior comparing app releases was removed.
+- Error detail surfacing (v2.2.1+): every classified error now carries a `detalle` field (truncated raw yt-dlp message) shown in error dialogs and the diagnostics window for easier troubleshooting.
 - `yt-dowloader.spec` — PyInstaller build config (multiplatform, includes CustomTkinter data files).
 - `.github/workflows/build.yml` — CI/CD for 3 platforms.
 - `requirements.txt` — `yt-dlp`, `customtkinter`, `pyinstaller`.
