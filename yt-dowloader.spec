@@ -7,7 +7,7 @@ block_cipher = None
 ctk_path = customtkinter.__path__[0]
 
 a = Analysis(
-    ['yt-dowloader.py'],
+    ['yt-dowloader.py', 'core.py'],
     pathex=[],
     binaries=[],
     datas=[

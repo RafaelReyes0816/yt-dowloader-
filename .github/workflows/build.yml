@@ -47,7 +47,11 @@ jobs:
         run: brew install create-dmg
 
       - name: Install Python dependencies
-        run: pip install pyinstaller yt-dlp customtkinter Pillow
+        run: pip install pyinstaller yt-dlp customtkinter Pillow pytest
+
+      - name: Run unit tests (Linux)
+        if: runner.os == 'Linux'
+        run: python -m pytest -q
 
       - name: Build executable
         run: pyinstaller yt-dowloader.spec

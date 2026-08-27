@@ -1,33 +1,36 @@
 #!/usr/bin/env python3
-__version__ = "2.2.1"
+__version__ = "3.0.0"
 
-import yt_dlp
 import os
-import sys
 import re
-import json
-import math
-import time
-import shutil
-import queue
 import subprocess
-import tkinter
+import sys
+import time
 import threading
-import urllib.request
+import tkinter
+
 import customtkinter as ctk
+import yt_dlp
 
 from tkinter import filedialog, messagebox
 
-GITHUB_REPO = "RafaelReyes0816/yt-dowloader-"
-CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".yt-downloader")
-CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
-PLATFORM_REGEX = re.compile(
-    r'(?:https?://)?(?:www\.)?(?:'
-    r'youtube\.com|youtu\.be|'
-    r'instagram\.com|instagr\.am|'
-    r'facebook\.com|fb\.watch|'
-    r'tiktok\.com|vm\.tiktok\.com'
-    r')'
+from core import (
+    GITHUB_REPO,
+    PLATFORM_REGEX,
+    TIPOS_BLOQUEANTES,
+    TIPOS_REINTENTO_SESION,
+    find_ffmpeg,
+    detectar_plataforma,
+    detectar_navegadores,
+    ClasificadorErrores,
+    cargar_preferencias,
+    guardar_preferencias,
+    verificar_url,
+    descargar_musica,
+    check_for_update,
+    obtener_ultima_version_ytdlp,
+    comparar_versiones,
+    elegir_navegador_sesion,
 )
 
 COLORS = {
@@ -54,452 +57,6 @@ FONTS = {
     "mono": ("Consolas", 12),
     "tag": ("Segoe UI", 10),
 }
-
-
-def find_ffmpeg():
-    if getattr(sys, 'frozen', False):
-        app_dir = os.path.dirname(sys.executable)
-        for name in ["ffmpeg.exe", "ffmpeg"]:
-            if os.path.isfile(os.path.join(app_dir, name)):
-                return app_dir
-    ffmpeg = shutil.which("ffmpeg")
-    if ffmpeg:
-        return os.path.dirname(ffmpeg)
-    if sys.platform == "win32":
-        for path in [r"C:\ffmpeg\bin", r"C:\Program Files\ffmpeg\bin"]:
-            if os.path.isfile(os.path.join(path, "ffmpeg.exe")):
-                return path
-    return None
-
-
-def detectar_plataforma(url):
-    dominios = {
-        "youtube.com": "YouTube", "youtu.be": "YouTube",
-        "instagram.com": "Instagram", "instagr.am": "Instagram",
-        "facebook.com": "Facebook", "fb.watch": "Facebook",
-        "tiktok.com": "TikTok", "vm.tiktok.com": "TikTok",
-    }
-    url_lower = url.lower()
-    for dominio, nombre in dominios.items():
-        if dominio in url_lower:
-            return nombre
-    return "Otra"
-
-
-def es_youtube(url):
-    return detectar_plataforma(url) == "YouTube"
-
-
-TIPOS_BLOQUEANTES = {
-    "private", "members_only", "age_restricted", "sign_in", "geo",
-    "unavailable", "not_found", "cookies", "bot",
-}
-
-TIPOS_REINTENTO_SESION = {"private", "members_only", "age_restricted", "sign_in", "cookies", "bot"}
-
-ORDEN_NAVEGADORES = ["firefox", "chrome", "brave", "edge"]
-
-NAVEGADORES_RUTAS = {
-    "chrome": {
-        "win32": [os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "User Data")],
-        "darwin": [os.path.expanduser("~/Library/Application Support/Google/Chrome")],
-        "linux": [os.path.expanduser("~/.config/google-chrome")],
-    },
-    "edge": {
-        "win32": [os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "Edge", "User Data")],
-        "darwin": [os.path.expanduser("~/Library/Application Support/Microsoft Edge")],
-        "linux": [os.path.expanduser("~/.config/microsoft-edge")],
-    },
-    "firefox": {
-        "win32": [os.path.join(os.environ.get("APPDATA", ""), "Mozilla", "Firefox")],
-        "darwin": [os.path.expanduser("~/Library/Application Support/Firefox")],
-        "linux": [os.path.expanduser("~/.mozilla/firefox")],
-    },
-    "brave": {
-        "win32": [os.path.join(os.environ.get("LOCALAPPDATA", ""), "BraveSoftware", "Brave-Browser", "User Data")],
-        "darwin": [os.path.expanduser("~/Library/Application Support/BraveSoftware/Brave-Browser")],
-        "linux": [os.path.expanduser("~/.config/BraveSoftware/Brave-Browser")],
-    },
-}
-
-
-def detectar_navegadores():
-    detectados = []
-    for nombre, rutas in NAVEGADORES_RUTAS.items():
-        if any(os.path.isdir(r) for r in rutas.get(sys.platform, [])):
-            detectados.append(nombre)
-    return detectados
-
-
-def construir_opciones_cookies(navegador):
-    if not navegador:
-        return {}
-    return {"cookiesfrombrowser": (navegador, None, None, None)}
-
-
-class ClasificadorErrores:
-    PATRONES = [
-        ("members_only", r"members[- ]only|member[- ]only|subscribers?[- ]only"),
-        ("age_restricted", r"age[- ]restricted|confirm your age|verify your age"),
-        ("bot", r"not a bot|bot check|bot verification|unusual traffic|request complete verification|rate limit|too many requests"),
-        ("cookies", r"could not extract cookies|session expired|keyring"),
-        ("sign_in", r"granted access|requires authentication|must be logged|login required|log ?in required"),
-        ("geo", r"not available in your country|geo-?restricted|blocked in your country|unavailable in your (region|country)"),
-        ("sign_in", r"\b(sign in|log ?in|loggin)\b"),
-        ("unavailable", r"video unavailable|no longer available|has been removed|has been deleted|content is not available|ya no esta disponible|no esta disponible"),
-        ("private", r"private video|video is private|this video is private|account is private|private account"),
-        ("extractor", r"unable to extract|nsig|signature extraction|no video formats|did not get a match|failed to resolve|precondition check failed"),
-        ("formato", r"requested format is not available"),
-        ("http", r"http error 403|http error 429|forbidden"),
-        ("red", r"urlerror|urlopen error|connection|getaddrinfo|temporary failure|timed? ?out|ssl|reset by peer|name or service not known"),
-        ("invalid_url", r"is not a valid url|invalid url|unsupported url|not a valid"),
-        ("ffmpeg", r"ffmpeg|postprocessing"),
-        ("not_found", r"video not found|no such video|404|not found"),
-    ]
-
-    MENSAJES = {
-        "private": {
-            "YouTube": "Este video no esta disponible. Puede que haya sido eliminado o marcado como privado.",
-            "Instagram": "Este contenido no esta disponible. Puede ser privado o haber expirado (stories).",
-            "Facebook": "Este video no esta disponible. Puede ser privado o haber sido eliminado.",
-            "TikTok": "Este video no esta disponible. Puede ser de una cuenta privada.",
-        },
-        "members_only": {
-            "YouTube": "Este video solo esta disponible para miembros del canal.",
-        },
-        "age_restricted": {
-            "YouTube": "Este contenido requiere iniciar sesion para confirmar la edad.",
-        },
-        "unavailable": {
-            "YouTube": "El video ya no esta disponible. Puede que haya sido eliminado.",
-            "Instagram": "El contenido ya no esta disponible. Puede ser privado o haber expirado.",
-            "Facebook": "El video ya no esta disponible. Puede ser privado o haber sido eliminado.",
-            "TikTok": "El video ya no esta disponible. Puede ser de una cuenta privada.",
-        },
-        "geo": {
-            "YouTube": "Este video no esta disponible en tu region.",
-        },
-        "sign_in": {
-            "YouTube": "Este video requiere acceso. Puede ser contenido restringido o privado.",
-            "Instagram": "Instagram requiere cuenta para ver este contenido (stories, perfiles privados).",
-            "Facebook": "Facebook requiere sesion para ver este video.",
-            "TikTok": "TikTok requiere sesion para este video (cuenta privada).",
-        },
-        "bot": {
-            "YouTube": "La plataforma detecto trafico inusual. Intenta de nuevo mas tarde.",
-        },
-        "invalid_url": {
-            "YouTube": "La URL no es valida. Verifica que sea un enlace correcto de YouTube, Instagram, TikTok o Facebook.",
-        },
-        "not_found": {
-            "YouTube": "No se encontro el video. Verifica que la URL sea correcta.",
-        },
-    }
-
-    MENSAJES_GENERICOS = {
-        "private": "Este contenido es privado.",
-        "members_only": "Solo disponible para miembros.",
-        "age_restricted": "Este contenido requiere iniciar sesion.",
-        "unavailable": "El contenido ya no esta disponible.",
-        "geo": "El contenido no esta disponible en tu region.",
-        "sign_in": "El contenido requiere iniciar sesion en la plataforma.",
-        "bot": "La plataforma detecto trafico inusual. Intenta mas tarde.",
-        "cookies": "No se pudieron usar las cookies del navegador.",
-        "invalid_url": "La URL no es valida. Verifica el enlace.",
-        "not_found": "No se encontro el contenido.",
-        "extractor": (
-            "El motor de descarga (yt-dlp) esta desactualizado para los cambios recientes "
-            "de la plataforma."
-        ),
-        "formato": "No se encontro un formato compatible con la version actual del motor de descarga.",
-        "http": "La plataforma rechazo o limito la peticion (HTTP 403/429).",
-        "red": "Problema de red al conectar con la plataforma.",
-        "ffmpeg": (
-            "Necesitas instalar ffmpeg para descargar este video.\n\n"
-            "Windows: descargalo de ffmpeg.org\n"
-            "Linux: sudo apt install ffmpeg\n"
-            "macOS: brew install ffmpeg"
-        ),
-    }
-
-    SUGERENCIAS = {
-        "private": "Inicia sesion en tu navegador en la plataforma y activa 'Usar sesion del navegador'.",
-        "members_only": "Verifica que tu cuenta tenga la membresia del canal.",
-        "age_restricted": "Inicia sesion en tu navegador en la plataforma y activa 'Usar sesion del navegador'.",
-        "geo": "Usa una red en la region permitida para este contenido.",
-        "sign_in": "Inicia sesion en tu navegador en la plataforma y activa 'Usar sesion del navegador'.",
-        "bot": "Espera unos minutos y vuelve a intentarlo.",
-        "cookies": "Abre el navegador, inicia sesion en la plataforma y reintenta. Si el navegador esta en uso, cierra su gestor de contrasenas.",
-        "not_found": "Verifica que la URL este completa y sea correcta.",
-        "extractor": "Actualiza yt-dlp desde el Diagnostico o ejecuta: python -m pip install -U yt-dlp",
-        "formato": "Actualiza yt-dlp e intenta de nuevo; tambien puedes cambiar la calidad seleccionada.",
-        "http": "Activa 'Usar sesion del navegador' y reintenta; si persiste, espera unos minutos.",
-        "red": "Verifica tu conexion a internet e intenta de nuevo.",
-    }
-
-    AVAILABILITY_MAP = {
-        "private": "private",
-        "needs_auth": "sign_in",
-        "subscriber_only": "members_only",
-        "members_only": "members_only",
-        "premium": "members_only",
-    }
-
-    @classmethod
-    def _mensaje(cls, tipo, plataforma):
-        mensaje = cls.MENSAJES.get(tipo, {}).get(plataforma)
-        if not mensaje:
-            mensaje = cls.MENSAJES.get(tipo, {}).get("YouTube")
-        if not mensaje:
-            mensaje = cls.MENSAJES_GENERICOS.get(tipo, "No se pudo descargar el video. Verifica que la URL sea correcta y que el video este publico.")
-        return mensaje
-
-    @classmethod
-    def clasificar(cls, exc, plataforma):
-        texto = str(exc)
-        msg = texto.lower()
-        detalle = texto.strip()
-        if len(detalle) > 400:
-            detalle = detalle[:400] + "..."
-        for tipo, patron in cls.PATRONES:
-            if re.search(patron, msg):
-                return {
-                    "tipo": tipo,
-                    "mensaje": cls._mensaje(tipo, plataforma),
-                    "sugerencia": cls.SUGERENCIAS.get(tipo),
-                    "detalle": detalle,
-                }
-        return {
-            "tipo": "desconocido",
-            "mensaje": "No se pudo descargar el video. Verifica que la URL sea correcta y que el video este publico.",
-            "sugerencia": None,
-            "detalle": detalle,
-        }
-
-    @classmethod
-    def clasificar_availability(cls, availability, plataforma):
-        tipo = cls.AVAILABILITY_MAP.get(availability or "")
-        if not tipo:
-            return None
-        return {
-            "tipo": tipo,
-            "mensaje": cls._mensaje(tipo, plataforma),
-            "sugerencia": cls.SUGERENCIAS.get(tipo),
-            "detalle": "",
-        }
-
-
-def cargar_preferencias():
-    defaults = {
-        "modo": "audio",
-        "calidad": "320",
-        "carpeta": os.path.join(os.path.expanduser("~"), "Downloads", "Mi_musica"),
-        "subtitulos": False,
-        "playlist": False,
-        "clipboard_auto": True,
-        "usar_sesion_navegador": False,
-        "navegador": "",
-    }
-    try:
-        if os.path.isfile(CONFIG_FILE):
-            with open(CONFIG_FILE, "r") as f:
-                saved = json.load(f)
-            defaults.update(saved)
-    except Exception:
-        pass
-    return defaults
-
-
-def guardar_preferencias(prefs):
-    try:
-        os.makedirs(CONFIG_DIR, exist_ok=True)
-        with open(CONFIG_FILE, "w") as f:
-            json.dump(prefs, f, indent=2)
-    except Exception:
-        pass
-
-
-def extraer_info_video(url, navegador=None):
-    try:
-        opciones = {"quiet": True, "no_warnings": True, "skip_download": True}
-        ffmpeg_path = find_ffmpeg()
-        if ffmpeg_path:
-            opciones["ffmpeg_location"] = ffmpeg_path
-        opciones.update(construir_opciones_cookies(navegador))
-        with yt_dlp.YoutubeDL(opciones) as ydl:
-            info = ydl.extract_info(url, download=False)
-            if info:
-                duracion = info.get("duration", 0)
-                mins, secs = divmod(duracion, 60)
-                horas, mins = divmod(mins, 60)
-                duracion_str = f"{horas}:{mins:02d}:{secs:02d}" if horas else f"{mins}:{secs:02d}"
-                return {
-                    "titulo": info.get("title", "Sin titulo"),
-                    "uploader": info.get("uploader", "Desconocido"),
-                    "duracion": duracion_str,
-                    "thumbnail": info.get("thumbnail", ""),
-                    "es_playlist": info.get("_type") == "playlist",
-                    "num_videos": info.get("playlist_count", 1) if info.get("_type") == "playlist" else 1,
-                }
-    except Exception:
-        pass
-    return None
-
-
-def verificar_url(url, navegador=None):
-    resultado = {"reconocida": False, "info": None, "restriccion": None}
-    if not url or not PLATFORM_REGEX.search(url):
-        return resultado
-    resultado["reconocida"] = True
-    try:
-        opciones = {"quiet": True, "no_warnings": True, "skip_download": True}
-        ffmpeg_path = find_ffmpeg()
-        if ffmpeg_path:
-            opciones["ffmpeg_location"] = ffmpeg_path
-        opciones.update(construir_opciones_cookies(navegador))
-        with yt_dlp.YoutubeDL(opciones) as ydl:
-            info = ydl.extract_info(url, download=False)
-            if not info:
-                return resultado
-            resultado["info"] = info
-            plataforma = detectar_plataforma(url)
-            restriccion = ClasificadorErrores.clasificar_availability(info.get("availability"), plataforma)
-            if restriccion:
-                resultado["restriccion"] = restriccion
-            return resultado
-    except yt_dlp.utils.DownloadError as e:
-        resultado["restriccion"] = ClasificadorErrores.clasificar(e, detectar_plataforma(url))
-        return resultado
-    except Exception:
-        return resultado
-
-
-def descargar_musica(url, carpeta, modo, calidad, subtitulos=False, playlist=False, progress_callback=None, speed_callback=None, navegador=None):
-    plataforma = detectar_plataforma(url)
-    try:
-        os.makedirs(carpeta, exist_ok=True)
-
-        def progress_hook(d):
-            if d["status"] == "downloading" and progress_callback:
-                total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
-                downloaded = d.get("downloaded_bytes", 0)
-                elapsed = d.get("elapsed", 0)
-                speed = downloaded / elapsed if elapsed > 0 else 0
-                if total > 0:
-                    progress_callback(downloaded / total)
-                if speed_callback:
-                    speed_callback(speed, downloaded, total)
-            elif d["status"] == "finished" and progress_callback:
-                progress_callback(1.0)
-
-        ffmpeg_path = find_ffmpeg()
-        youtube = plataforma == "YouTube"
-
-        opciones = {
-            "outtmpl": os.path.join(carpeta, "%(title)s.%(ext)s"),
-            "noplaylist": not playlist,
-            "progress_hooks": [progress_hook],
-        }
-        if ffmpeg_path:
-            opciones["ffmpeg_location"] = ffmpeg_path
-        opciones.update(construir_opciones_cookies(navegador))
-
-        if youtube and subtitulos:
-            opciones["writesubtitles"] = True
-            opciones["subtitleslangs"] = ["es", "en", "pt"]
-
-        if modo == "audio":
-            if youtube:
-                opciones["format"] = "bestaudio/best"
-                opciones["postprocessors"] = [{
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": calidad,
-                }]
-                opciones["postprocessor_args"] = ["-ar", "44100"]
-                opciones["prefer_ffmpeg"] = True
-            else:
-                opciones["format"] = "bestaudio/best"
-                opciones["postprocessors"] = [{
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": "192",
-                }]
-                opciones["prefer_ffmpeg"] = True
-        else:
-            if youtube:
-                resoluciones = {
-                    "360p": "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/mp4",
-                    "480p": "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/mp4",
-                    "720p": "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/mp4",
-                    "1080p": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/mp4",
-                }
-                opciones["format"] = resoluciones.get(calidad, resoluciones["720p"])
-                opciones["merge_output_format"] = "mp4"
-                opciones["prefer_ffmpeg"] = True
-            else:
-                opciones["format"] = "best"
-                opciones["merge_output_format"] = "mp4"
-                opciones["prefer_ffmpeg"] = True
-
-        with yt_dlp.YoutubeDL(opciones) as ydl:
-            ydl.download([url])
-        return True, "Descarga completada", None
-
-    except yt_dlp.utils.DownloadError as e:
-        clasificado = ClasificadorErrores.clasificar(e, plataforma)
-        mensaje = clasificado["mensaje"]
-        sugerencia = clasificado.get("sugerencia")
-        if sugerencia:
-            mensaje += "\n\nSugerencia:\n" + sugerencia
-        detalle = (clasificado.get("detalle") or "").strip()
-        if detalle:
-            mensaje += "\n\nDetalle tecnico:\n" + detalle
-        return False, mensaje, clasificado.get("tipo")
-    except Exception:
-        return False, "Ocurrio un error inesperado. Si persiste, intenta con otra URL o reinicia la app.", None
-
-
-def check_for_update(current_version):
-    try:
-        url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-        req = urllib.request.Request(url, headers={"Accept": "application/vnd.github.v3+json"})
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read())
-            latest = data.get("tag_name", "").lstrip("v")
-            if latest and latest != current_version:
-                return True, latest, data.get("html_url", "")
-        return False, current_version, ""
-    except Exception:
-        return False, current_version, ""
-
-
-def obtener_ultima_version_ytdlp():
-    try:
-        req = urllib.request.Request(
-            "https://pypi.org/pypi/yt-dlp/json",
-            headers={"Accept": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            data = json.loads(resp.read())
-        return (data.get("info") or {}).get("version", "")
-    except Exception:
-        return ""
-
-
-def comparar_versiones(v1, v2):
-    def clave(v):
-        partes = []
-        for x in str(v).split("."):
-            try:
-                partes.append(int(x))
-            except ValueError:
-                break
-        return tuple(partes)
-    k1, k2 = clave(v1), clave(v2)
-    if not k1 or not k2:
-        return 0
-    return (k1 > k2) - (k1 < k2)
 
 
 class SegmentedControl(ctk.CTkFrame):
@@ -601,6 +158,21 @@ class QueueCard(ctk.CTkFrame):
                                           text_color=COLORS["accent.progress"], width=100)
         self.status_label.grid(row=0, column=3, rowspan=2, padx=(0, 12), pady=10)
 
+        self.cancel_btn = ctk.CTkButton(
+            self, text="Cancelar", command=self._cancelar,
+            font=FONTS["small"], width=70, height=28,
+            fg_color="transparent", hover_color=COLORS["bg.surface-hover"],
+            border_color=COLORS["border.subtle"], border_width=1,
+            text_color=COLORS["text.secondary"],
+        )
+        self.cancel_btn.grid(row=0, column=4, rowspan=2, padx=(0, 12), pady=10)
+
+        self.on_cancel = None
+
+    def _cancelar(self):
+        if self.on_cancel:
+            self.on_cancel()
+
     def _truncate_url(self, url):
         return url if len(url) <= 50 else url[:47] + "..."
 
@@ -633,7 +205,7 @@ class QueueCard(ctk.CTkFrame):
             self.after(0, lambda: self._draw_ring(1.0))
             self.after(0, lambda: self.micro_bar.set(1.0))
         elif color == COLORS["accent.error"]:
-            self.after(0, lambda: self.status_label.configure(text=f"Error"))
+            self.after(0, lambda: self.status_label.configure(text="Error"))
 
     def set_error_color(self):
         self.after(0, lambda: self.configure(border_width=2, border_color=COLORS["accent.error"]))
@@ -819,11 +391,14 @@ class App(ctk.CTk):
 
         self.prefs = cargar_preferencias()
         self.historial = []
+        self._hist_lock = threading.Lock()
         self.is_downloading = False
+        self.stop_all = threading.Event()
         self.clipboard_auto = self.prefs.get("clipboard_auto", True)
         self.ffmpeg_ok = find_ffmpeg() is not None
         self.navegadores = detectar_navegadores()
         self.queue_items = []
+        self.ydl_holders = {}
 
         self._build_ui()
         self._aplicar_preferencias()
@@ -893,7 +468,7 @@ class App(ctk.CTk):
         url_row.grid_columnconfigure(0, weight=1)
 
         self.url_entry = ctk.CTkEntry(url_row,
-                                       placeholder_text="Pega la URL del video (YouTube, Instagram, TikTok, Facebook)...",
+                                       placeholder_text="Pega la URL del video (YouTube, Instagram, TikTok, Facebook, Twitch, Vimeo, X, Reddit)...",
                                        font=FONTS["mono"], height=40,
                                        fg_color=COLORS["bg.base"],
                                        border_color=COLORS["border.subtle"],
@@ -951,6 +526,20 @@ class App(ctk.CTk):
         PillToggle(row_toggles, "Auto-URL", self.clipboard_var, command=self._toggle_clipboard,
                    fg_color=COLORS["bg.surface"], text_color=COLORS["text.secondary"],
                    hover_color=COLORS["bg.surface-hover"]).pack(side="left")
+
+        ctk.CTkLabel(row_toggles, text="En paralelo:", font=FONTS["small"],
+                     text_color=COLORS["text.secondary"]).pack(side="left", padx=(12, 6))
+        self.paralelas_var = ctk.StringVar(value=str(self.prefs.get("max_paralelas", 1)))
+        self.paralelas_option = ctk.CTkOptionMenu(row_toggles, variable=self.paralelas_var,
+                                                  values=["1", "2", "3"],
+                                                  font=FONTS["small"],
+                                                  fg_color=COLORS["bg.base"],
+                                                  button_color=COLORS["border.subtle"],
+                                                  button_hover_color=COLORS["bg.surface-hover"],
+                                                  dropdown_fg_color=COLORS["bg.surface"],
+                                                  dropdown_hover_color=COLORS["bg.surface-hover"],
+                                                  width=60, height=32)
+        self.paralelas_option.pack(side="left")
 
         row2 = ctk.CTkFrame(opt_frame, fg_color="transparent")
         row2.grid(row=2, column=0, sticky="ew", padx=15, pady=(0, 12))
@@ -1036,6 +625,11 @@ class App(ctk.CTk):
                       font=FONTS["body_bold"], height=36,
                       fg_color=COLORS["accent.brand"], hover_color=COLORS["accent.brand-hover"],
                       text_color=COLORS["text.primary"]).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(btn_row, text="Detener todo", command=self._detener_todo,
+                      font=FONTS["body"], height=36,
+                      fg_color="transparent", hover_color=COLORS["bg.surface-hover"],
+                      border_color=COLORS["accent.error"], border_width=1,
+                      text_color=COLORS["accent.error"]).pack(side="left", padx=(0, 8))
         ctk.CTkButton(btn_row, text="Limpiar cola", command=self._limpiar_cola,
                       font=FONTS["body"], height=36,
                       fg_color="transparent", hover_color=COLORS["bg.surface-hover"],
@@ -1069,6 +663,7 @@ class App(ctk.CTk):
         navegador_pref = self.prefs.get("navegador", "")
         if navegador_pref in self.navegadores:
             self.navegador_var.set(navegador_pref.capitalize())
+        self.paralelas_var.set(str(self.prefs.get("max_paralelas", 1)))
         self._actualizar_estado_navegador()
 
     def _guardar_prefs_actuales(self):
@@ -1081,6 +676,7 @@ class App(ctk.CTk):
             "clipboard_auto": self.clipboard_var.get(),
             "usar_sesion_navegador": self.usar_sesion_var.get(),
             "navegador": self._navegador_seleccionado(),
+            "max_paralelas": int(self.paralelas_var.get()) if self.paralelas_var.get().isdigit() else 1,
         })
         guardar_preferencias(self.prefs)
 
@@ -1095,14 +691,7 @@ class App(ctk.CTk):
         self.navegador_option.configure(state=state)
 
     def _elegir_navegador_sesion(self):
-        detectados = set(detectar_navegadores())
-        pref = self.prefs.get("navegador", "")
-        if pref in detectados:
-            return pref
-        for nav in ORDEN_NAVEGADORES:
-            if nav in detectados:
-                return nav
-        return ""
+        return elegir_navegador_sesion(self.prefs.get("navegador", ""))
 
     def _actualizar_calidades(self):
         if self.modo_var.get().startswith("Audio"):
@@ -1172,7 +761,7 @@ class App(ctk.CTk):
         if not PLATFORM_REGEX.search(url):
             messagebox.showwarning("URL no compatible",
                                     "Esta URL no es de una plataforma compatible.\n\n"
-                                    "Plataformas: YouTube, Instagram, TikTok, Facebook.")
+                                    "Plataformas: YouTube, Instagram, TikTok, Facebook, Twitch, Vimeo, X, Reddit.")
             return
 
         plataforma = detectar_plataforma(url)
@@ -1186,7 +775,7 @@ class App(ctk.CTk):
         card = QueueCard(self.cola_scroll, url, plataforma, modo)
         card.grid(row=len(self.queue_items), column=0, sticky="ew", pady=4)
 
-        self.queue_items.append({
+        item = {
             "card": card,
             "url": url,
             "plataforma": plataforma,
@@ -1196,12 +785,39 @@ class App(ctk.CTk):
             "subtitulos": subtitulos,
             "playlist": playlist,
             "navegador": navegador,
-        })
+            "cancel_flag": threading.Event(),
+            "ydl_holder": {},
+            "who_removed": None,
+        }
+        card.on_cancel = lambda i=item: self._cancelar_item(i)
+        self.queue_items.append(item)
 
         self.url_entry.delete(0, "end")
         self._toggle_empty_state()
         self._actualizar_counter()
         self._guardar_prefs_actuales()
+
+    def _cancelar_item(self, item):
+        item["cancel_flag"].set()
+        ydl = item["ydl_holder"].get("ydl")
+        if ydl is not None:
+            try:
+                if hasattr(ydl, "params"):
+                    ydl.params["noprogress"] = True
+            except Exception:
+                pass
+
+    def _detener_todo(self):
+        self.stop_all.set()
+        for item in self.queue_items:
+            item["cancel_flag"].set()
+            ydl = item["ydl_holder"].get("ydl")
+            if ydl is not None:
+                try:
+                    if hasattr(ydl, "params"):
+                        ydl.params["noprogress"] = True
+                except Exception:
+                    pass
 
     def _iniciar_cola(self):
         if self.is_downloading:
@@ -1212,90 +828,140 @@ class App(ctk.CTk):
             messagebox.showinfo("Cola vacia", "Agrega videos a la cola primero.")
             return
 
+        self.stop_all.clear()
         nav_sesion = self._navegador_seleccionado()
         self.is_downloading = True
         threading.Thread(target=self._procesar_cola, args=(pending, nav_sesion), daemon=True).start()
 
     def _procesar_cola(self, pending, navegador_actual):
         total = len(pending)
-        for idx, item in enumerate(pending):
-            if item["card"].status_label.cget("text") != "Pendiente":
-                continue
+        max_paralelas = int(self.prefs.get("max_paralelas", 1) or 1)
+        max_paralelas = max(1, min(max_paralelas, 3))
 
-            self.after(0, lambda i=item: i["card"].set_status("Verificando...", COLORS["accent.progress"]))
-            self.after(0, lambda: self.estado_var.set(f"Verificando {idx + 1} de {total}..."))
+        if max_paralelas <= 1:
+            for idx, item in enumerate(pending):
+                if self.stop_all.is_set():
+                    break
+                self._procesar_item(item, idx, total, navegador_actual)
+            self.is_downloading = False
+            self.stop_all.clear()
+            self.after(0, lambda: self.estado_var.set("Listo"))
             self.after(0, self._actualizar_counter)
+            return
 
-            precheck = verificar_url(item["url"], navegador_actual)
-            restriccion = precheck.get("restriccion")
-            if restriccion and restriccion.get("tipo") in TIPOS_BLOQUEANTES:
-                mensaje = restriccion["mensaje"]
-                sugerencia = restriccion.get("sugerencia")
-                if sugerencia:
-                    mensaje += "\n\nSugerencia:\n" + sugerencia
-                self.after(0, lambda i=item: i["card"].set_status("Error", COLORS["accent.error"]))
-                self.after(0, lambda i=item: i["card"].set_error_color())
-                self.after(0, lambda m=mensaje: messagebox.showerror("No se pudo descargar", m))
-                self.after(0, self._actualizar_counter)
-                continue
-
-            self.after(0, lambda i=item: i["card"].set_status("Descargando...", COLORS["accent.progress"]))
-            self.after(0, lambda: self.estado_var.set(f"Descargando {idx + 1} de {total}..."))
-            self.after(0, self._actualizar_counter)
-
-            def on_progress(val):
-                self.after(0, lambda v=val: item["card"].update_progress(v))
-
-            def on_speed(speed, downloaded, total_bytes):
-                if speed > 1024 * 1024:
-                    speed_str = f"{speed / (1024 * 1024):.1f} MB/s"
-                elif speed > 1024:
-                    speed_str = f"{speed / 1024:.0f} KB/s"
-                else:
-                    speed_str = f"{speed:.0f} B/s"
-                self.after(0, lambda s=speed_str: self.estado_var.set(f"Descargando {idx + 1} de {total}... {s}"))
-
-            exito, mensaje, tipo_fallo = descargar_musica(
-                item["url"],
-                item["carpeta"],
-                item["modo"],
-                item["calidad"],
-                subtitulos=item["subtitulos"],
-                playlist=item["playlist"],
-                progress_callback=on_progress,
-                speed_callback=on_speed,
-                navegador=navegador_actual,
-            )
-
-            if not exito and tipo_fallo in TIPOS_REINTENTO_SESION and not navegador_actual:
-                nav = self._elegir_navegador_sesion()
-                if nav:
-                    self.after(0, lambda i=item: i["card"].set_status("Reintentando con sesion...", COLORS["accent.progress"]))
-                    self.after(0, lambda n=nav: self.estado_var.set(f"Reintentando {idx + 1} de {total} con sesion de {n.capitalize()}..."))
-                    exito, mensaje, tipo_fallo = descargar_musica(
-                        item["url"],
-                        item["carpeta"],
-                        item["modo"],
-                        item["calidad"],
-                        subtitulos=item["subtitulos"],
-                        playlist=item["playlist"],
-                        progress_callback=on_progress,
-                        speed_callback=on_speed,
-                        navegador=nav,
-                    )
-
-            if exito:
-                self.after(0, lambda i=item: i["card"].set_status("Completado", COLORS["accent.success"]))
-                self.historial.append({"url": item["url"], "fecha": time.strftime("%Y-%m-%d %H:%M")})
-            else:
-                self.after(0, lambda i=item: i["card"].set_status("Error", COLORS["accent.error"]))
-                self.after(0, lambda i=item: i["card"].set_error_color())
-                self.after(0, lambda m=mensaje: messagebox.showerror("No se pudo descargar", m))
-
-            self.after(0, self._actualizar_counter)
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=max_paralelas) as pool:
+            futures = {}
+            for idx, item in enumerate(pending):
+                if self.stop_all.is_set():
+                    break
+                futures[pool.submit(self._procesar_item, item, idx, total, navegador_actual)] = idx
+            for fut in futures:
+                try:
+                    fut.result()
+                except Exception:
+                    pass
 
         self.is_downloading = False
+        self.stop_all.clear()
         self.after(0, lambda: self.estado_var.set("Listo"))
+        self.after(0, self._actualizar_counter)
+
+    def _procesar_item(self, item, idx, total, navegador_actual):
+        if item["card"].status_label.cget("text") != "Pendiente":
+            return
+        if item["cancel_flag"].is_set():
+            return
+
+        self.after(0, lambda i=item: i["card"].set_status("Verificando...", COLORS["accent.progress"]))
+        self.after(0, lambda: self.estado_var.set(f"Verificando {idx + 1} de {total}..."))
+        self.after(0, self._actualizar_counter)
+
+        precheck = verificar_url(item["url"], navegador_actual)
+        restriccion = precheck.get("restriccion")
+        if restriccion and restriccion.get("tipo") in TIPOS_BLOQUEANTES:
+            mensaje = restriccion["mensaje"]
+            sugerencia = restriccion.get("sugerencia")
+            if sugerencia:
+                mensaje += "\n\nSugerencia:\n" + sugerencia
+            self.after(0, lambda i=item: i["card"].set_status("Error", COLORS["accent.error"]))
+            self.after(0, lambda i=item: i["card"].set_error_color())
+            self.after(0, lambda m=mensaje: messagebox.showerror("No se pudo descargar", m))
+            self.after(0, self._actualizar_counter)
+            return
+
+        if self.stop_all.is_set() or item["cancel_flag"].is_set():
+            return
+
+        self.after(0, lambda i=item: i["card"].set_status("Descargando...", COLORS["accent.progress"]))
+        self.after(0, lambda: self.estado_var.set(f"Descargando {idx + 1} de {total}..."))
+        self.after(0, self._actualizar_counter)
+
+        def on_progress(val):
+            self.after(0, lambda v=val: item["card"].update_progress(v))
+
+        def on_speed(speed, downloaded, total_bytes):
+            if speed > 1024 * 1024:
+                speed_str = f"{speed / (1024 * 1024):.1f} MB/s"
+            elif speed > 1024:
+                speed_str = f"{speed / 1024:.0f} KB/s"
+            else:
+                speed_str = f"{speed:.0f} B/s"
+            self.after(0, lambda s=speed_str: self.estado_var.set(f"Descargando {idx + 1} de {total}... {s}"))
+
+        exito, mensaje, tipo_fallo = descargar_musica(
+            item["url"],
+            item["carpeta"],
+            item["modo"],
+            item["calidad"],
+            subtitulos=item["subtitulos"],
+            playlist=item["playlist"],
+            progress_callback=on_progress,
+            speed_callback=on_speed,
+            navegador=navegador_actual,
+            cancel_flag=item["cancel_flag"],
+            ydl_holder=item["ydl_holder"],
+        )
+
+        if exito is False and tipo_fallo == "cancelada":
+            self.after(0, lambda i=item: i["card"].set_status("Cancelada", COLORS["text.secondary"]))
+            self.after(0, lambda i=item: i["card"].canvas.delete("all"))
+            self.after(0, self._actualizar_counter)
+            return
+
+        if not exito and tipo_fallo in TIPOS_REINTENTO_SESION and not navegador_actual:
+            nav = self._elegir_navegador_sesion()
+            if nav:
+                self.after(0, lambda i=item: i["card"].set_status("Reintentando con sesion...", COLORS["accent.progress"]))
+                self.after(0, lambda n=nav: self.estado_var.set(f"Reintentando {idx + 1} de {total} con sesion de {n.capitalize()}..."))
+                exito, mensaje, tipo_fallo = descargar_musica(
+                    item["url"],
+                    item["carpeta"],
+                    item["modo"],
+                    item["calidad"],
+                    subtitulos=item["subtitulos"],
+                    playlist=item["playlist"],
+                    progress_callback=on_progress,
+                    speed_callback=on_speed,
+                    navegador=nav,
+                    cancel_flag=item["cancel_flag"],
+                    ydl_holder=item["ydl_holder"],
+                )
+                if exito is False and tipo_fallo == "cancelada":
+                    self.after(0, lambda i=item: i["card"].set_status("Cancelada", COLORS["text.secondary"]))
+                    self.after(0, lambda i=item: i["card"].canvas.delete("all"))
+                    self.after(0, self._actualizar_counter)
+                    return
+
+        if exito:
+            self.after(0, lambda i=item: i["card"].set_status("Completado", COLORS["accent.success"]))
+            with self._hist_lock:
+                self.historial.append({"url": item["url"], "fecha": time.strftime("%Y-%m-%d %H:%M")})
+        else:
+            self.after(0, lambda i=item: i["card"].set_status("Error", COLORS["accent.error"]))
+            self.after(0, lambda i=item: i["card"].set_error_color())
+            self.after(0, lambda m=mensaje: messagebox.showerror("No se pudo descargar", m))
+
         self.after(0, self._actualizar_counter)
 
     def _limpiar_cola(self):
