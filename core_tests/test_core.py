@@ -12,6 +12,11 @@ from core import (
     _construir_opciones_descarga,
     DescargaCancelada,
     PLATAFORMAS_CONFIG,
+    RESOLUCIONES_YOUTUBE,
+    RESOLUCIONES_GENERICAS,
+    verificar_url,
+    cargar_preferencias,
+    guardar_preferencias,
 )
 
 
@@ -196,3 +201,157 @@ class TestPlataformasConfig:
     def test_todas_plataformas_presentes(self):
         for p in ["YouTube", "Instagram", "Facebook", "TikTok", "Twitch", "Vimeo", "Twitter/X", "Reddit"]:
             assert p in PLATAFORMAS_CONFIG
+
+
+class TestCalidadNoYoutube:
+    def test_audio_bitrate_honrado(self):
+        for bitrate in ("128", "192", "256", "320"):
+            opts = _construir_opciones_descarga(
+                "https://tiktok.com/@u/video/1", "/tmp/o", "audio", bitrate, False, False
+            )
+            pp = opts["postprocessors"][0]
+            assert pp["preferredquality"] == bitrate
+
+    @pytest.mark.parametrize("res", ["360p", "480p", "720p", "1080p", "1440p", "2160p"])
+    def test_video_resolucion_generica(self, res):
+        opts = _construir_opciones_descarga(
+            "https://instagram.com/p/x", "/tmp/o", "video", res, False, False
+        )
+        limite = res.replace("p", "")
+        assert f"height<={limite}" in opts["format"]
+        assert opts["merge_output_format"] == "mp4"
+
+    def test_video_resolucion_default_720p(self):
+        opts = _construir_opciones_descarga(
+            "https://instagram.com/p/x", "/tmp/o", "video", "9999p", False, False
+        )
+        assert "height<=720" in opts["format"]
+
+
+class TestResolucionesYoutube4K:
+    def test_map_tiene_4k_y_2k(self):
+        assert "1440p" in RESOLUCIONES_YOUTUBE
+        assert "2160p" in RESOLUCIONES_YOUTUBE
+
+    def test_4k_sin_filtro_ext_mp4(self):
+        fmt = RESOLUCIONES_YOUTUBE["2160p"]
+        assert "height<=2160" in fmt
+        assert "ext=mp4" not in fmt
+
+    def test_2k_sin_filtro_ext_mp4(self):
+        fmt = RESOLUCIONES_YOUTUBE["1440p"]
+        assert "ext=mp4" not in fmt
+
+    def test_fhd_conserva_mp4(self):
+        assert "ext=mp4" in RESOLUCIONES_YOUTUBE["1080p"]
+
+    def test_4k_aplicado_en_descarga(self):
+        opts = _construir_opciones_descarga(
+            "https://youtube.com/watch?v=x", "/tmp/o", "video", "2160p", False, False
+        )
+        assert "height<=2160" in opts["format"]
+        assert "ext=mp4" not in opts["format"]
+
+
+class TestPostprocessorCallback:
+    def test_opciones_incluyen_postprocessor_hooks(self):
+        llamadas = []
+        opts = _construir_opciones_descarga(
+            "https://youtube.com/watch?v=x", "/tmp/o", "audio", "128", False, False,
+            postprocessor_callback=lambda e, n: llamadas.append((e, n)),
+        )
+        hook = opts["postprocessor_hooks"][0]
+        hook({"status": "started", "postprocessor": "ExtractAudio"})
+        hook({"status": "finished", "postprocessor": "ExtractAudio"})
+        assert ("started", "ExtractAudio") in llamadas
+
+    def test_sin_callback_no_hooks(self):
+        opts = _construir_opciones_descarga(
+            "https://youtube.com/watch?v=x", "/tmp/o", "audio", "128", False, False
+        )
+        assert "postprocessor_hooks" not in opts
+
+
+class TestClasificadorTikTok:
+    @pytest.mark.parametrize("mensaje", [
+        "ERROR: [tiktok] 123: Unexpected response from webpage request; please report",
+        "ERROR: [tiktok] 123: Unable to extract universal data for rehydration",
+        "Impersonating chrome133a is not supported",
+    ])
+    def test_errores_tiktok_a_extractor(self, mensaje):
+        import yt_dlp
+        res = ClasificadorErrores.clasificar(yt_dlp.utils.DownloadError(mensaje), "TikTok")
+        assert res["tipo"] == "extractor"
+        assert "TikTok" in res["mensaje"]
+
+    def test_sugerencia_tiktok_incluye_curl_cffi(self):
+        import yt_dlp
+        res = ClasificadorErrores.clasificar(
+            yt_dlp.utils.DownloadError("Unexpected response from webpage request"), "TikTok")
+        assert "curl-cffi" in res["sugerencia"]
+        assert "Usar sesion" in res["sugerencia"]
+
+
+class TestVerificarUrlCancel:
+    def test_url_invalida_temprana(self):
+        r = verificar_url("https://example.com", cancel_flag=None)
+        assert r["reconocida"] is False
+
+    def test_acepta_cancel_flag_sin_romper(self):
+        r = verificar_url("", navegador=None, cancel_flag=threading.Event())
+        assert r["reconocida"] is False
+
+    def test_cancel_flag_convierte_a_cancelada(self, monkeypatch):
+        import core as core_mod
+        from core import DescargaCancelada as DC
+
+        def fake_opciones(nav=None, cancel_flag=None):
+            return {}
+
+        class FakeYDL:
+            def __init__(self, *a, **k): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): return None
+            def extract_info(self, url, download=False):
+                raise DC()
+
+        monkeypatch.setattr(core_mod, "_opciones_base", fake_opciones)
+        monkeypatch.setattr(core_mod.yt_dlp, "YoutubeDL", FakeYDL)
+        flag = threading.Event()
+        r = verificar_url("https://youtu.be/x", navegador=None, cancel_flag=flag)
+        assert r["restriccion"]["tipo"] == "cancelada"
+
+
+class TestPreferenciasRoundtrip:
+    def test_roundtrip_vacio(self, monkeypatch, tmp_path):
+        import core as core_mod
+        cfg = tmp_path / "cfg"
+        monkeypatch.setattr(core_mod, "CONFIG_DIR", str(cfg))
+        monkeypatch.setattr(core_mod, "CONFIG_FILE", str(cfg / "config.json"))
+        prefs = {"modo": "audio", "calidad": "320", "max_paralelas": 1}
+        guardar_preferencias(prefs)
+        loaded = cargar_preferencias()
+        assert loaded["modo"] == "audio"
+        assert loaded["calidad"] == "320"
+
+    def test_defaults_cuando_no_hay_archivo(self, monkeypatch, tmp_path):
+        import core as core_mod
+        cfg = tmp_path / "cfg"
+        monkeypatch.setattr(core_mod, "CONFIG_DIR", str(cfg))
+        monkeypatch.setattr(core_mod, "CONFIG_FILE", str(cfg / "config.json"))
+        with pytest.raises(FileNotFoundError):
+            open(cfg / "config.json")
+        loaded = cargar_preferencias()
+        assert loaded["modo"] == "audio"
+        assert loaded["carpeta"] != ""
+
+    def test_json_corrupto_no_rompe(self, monkeypatch, tmp_path):
+        import core as core_mod
+        cfg = tmp_path / "cfg"
+        cfg.mkdir()
+        cfg_file = cfg / "config.json"
+        cfg_file.write_text("{ no es json")
+        monkeypatch.setattr(core_mod, "CONFIG_DIR", str(cfg))
+        monkeypatch.setattr(core_mod, "CONFIG_FILE", str(cfg_file))
+        loaded = cargar_preferencias()
+        assert loaded["modo"] == "audio"

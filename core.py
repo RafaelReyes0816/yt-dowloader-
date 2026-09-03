@@ -71,6 +71,17 @@ RESOLUCIONES_YOUTUBE = {
     "480p": "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/mp4",
     "720p": "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/mp4",
     "1080p": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/mp4",
+    "1440p": "bestvideo[height<=1440]+bestaudio/best[height<=1440]",
+    "2160p": "bestvideo[height<=2160]+bestaudio/best[height<=2160]",
+}
+
+RESOLUCIONES_GENERICAS = {
+    "360p": "bestvideo[height<=360]+bestaudio/best[height<=360]/best",
+    "480p": "bestvideo[height<=480]+bestaudio/best[height<=480]/best",
+    "720p": "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+    "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+    "1440p": "bestvideo[height<=1440]+bestaudio/best[height<=1440]/best",
+    "2160p": "bestvideo[height<=2160]+bestaudio/best[height<=2160]/best",
 }
 
 PLATAFORMAS_CONFIG = {
@@ -146,7 +157,7 @@ class ClasificadorErrores:
         ("sign_in", r"\b(sign in|log ?in|loggin)\b"),
         ("unavailable", r"video unavailable|no longer available|has been removed|has been deleted|content is not available|ya no esta disponible|no esta disponible"),
         ("private", r"private video|video is private|this video is private|account is private|private account"),
-        ("extractor", r"unable to extract|nsig|signature extraction|no video formats|did not get a match|failed to resolve|precondition check failed"),
+        ("extractor", r"unable to extract|nsig|signature extraction|no video formats|did not get a match|failed to resolve|precondition check failed|unexpected response from webpage request|impersonat"),
         ("formato", r"requested format is not available"),
         ("http", r"http error 403|http error 429|forbidden"),
         ("red", r"urlerror|urlopen error|connection|getaddrinfo|temporary failure|timed? ?out|ssl|reset by peer|name or service not known"),
@@ -189,6 +200,9 @@ class ClasificadorErrores:
         "invalid_url": {
             "YouTube": "La URL no es valida. Verifica que sea un enlace correcto de YouTube, Instagram, TikTok o Facebook.",
         },
+        "extractor": {
+            "TikTok": "TikTok bloqueo la extraccion (respuesta inesperada o challenge antiusuario).",
+        },
         "not_found": {
             "YouTube": "No se encontro el video. Verifica que la URL sea correcta.",
         },
@@ -229,7 +243,7 @@ class ClasificadorErrores:
         "bot": "Espera unos minutos y vuelve a intentarlo.",
         "cookies": "Abre el navegador, inicia sesion en la plataforma y reintenta. Si el navegador esta en uso, cierra su gestor de contrasenas.",
         "not_found": "Verifica que la URL este completa y sea correcta.",
-        "extractor": "Actualiza yt-dlp desde el Diagnostico o ejecuta: python -m pip install -U yt-dlp",
+        "extractor": "Actualiza yt-dlp desde el Diagnostico o ejecuta: python -m pip install -U \"yt-dlp[default,curl-cffi]\". Si el error es de TikTok y persiste, activa 'Usar sesion del navegador' para pasar el challenge, o espera unos minutos (TikTok bloquea IPs temporalmente).",
         "formato": "Actualiza yt-dlp e intenta de nuevo; tambien puedes cambiar la calidad seleccionada.",
         "http": "Activa 'Usar sesion del navegador' y reintenta; si persiste, espera unos minutos.",
         "red": "Verifica tu conexion a internet e intenta de nuevo.",
@@ -318,8 +332,13 @@ def guardar_preferencias(prefs):
         pass
 
 
-def _opciones_base(navegador=None):
+def _opciones_base(navegador=None, cancel_flag=None):
     opciones = {"quiet": True, "no_warnings": True, "skip_download": True}
+    if cancel_flag is not None:
+        def hook(d):
+            if cancel_flag.is_set():
+                raise DescargaCancelada()
+        opciones["progress_hooks"] = [hook]
     ffmpeg_path = find_ffmpeg()
     if ffmpeg_path:
         opciones["ffmpeg_location"] = ffmpeg_path
@@ -350,13 +369,13 @@ def extraer_info_video(url, navegador=None):
     return None
 
 
-def verificar_url(url, navegador=None):
+def verificar_url(url, navegador=None, cancel_flag=None):
     resultado = {"reconocida": False, "info": None, "restriccion": None}
     if not url or not PLATFORM_REGEX.search(url):
         return resultado
     resultado["reconocida"] = True
     try:
-        opciones = _opciones_base(navegador)
+        opciones = _opciones_base(navegador, cancel_flag)
         with yt_dlp.YoutubeDL(opciones) as ydl:
             info = ydl.extract_info(url, download=False)
             if not info:
@@ -367,6 +386,9 @@ def verificar_url(url, navegador=None):
             if restriccion:
                 resultado["restriccion"] = restriccion
             return resultado
+    except DescargaCancelada:
+        resultado["restriccion"] = {"tipo": "cancelada", "mensaje": "Verificacion cancelada", "sugerencia": None, "detalle": ""}
+        return resultado
     except yt_dlp.utils.DownloadError as e:
         resultado["restriccion"] = ClasificadorErrores.clasificar(e, detectar_plataforma(url))
         return resultado
@@ -374,7 +396,7 @@ def verificar_url(url, navegador=None):
         return resultado
 
 
-def _construir_opciones_descarga(url, carpeta, modo, calidad, subtitulos, playlist, progreso_callback=None, cancel_flag=None):
+def _construir_opciones_descarga(url, carpeta, modo, calidad, subtitulos, playlist, progreso_callback=None, cancel_flag=None, postprocessor_callback=None):
     plataforma = detectar_plataforma(url)
     youtube = plataforma == "YouTube"
 
@@ -388,6 +410,12 @@ def _construir_opciones_descarga(url, carpeta, modo, calidad, subtitulos, playli
         elif d["status"] == "finished" and progreso_callback:
             progreso_callback(1.0)
 
+    def postprocessor_hook(d):
+        if postprocessor_callback:
+            estado = d.get("status")
+            if estado in ("started", "finished"):
+                postprocessor_callback(estado, d.get("postprocessor") or "")
+
     ffmpeg_path = find_ffmpeg()
 
     if youtube:
@@ -400,6 +428,8 @@ def _construir_opciones_descarga(url, carpeta, modo, calidad, subtitulos, playli
         "noplaylist": not playlist,
         "progress_hooks": [progress_hook],
     }
+    if postprocessor_callback:
+        opciones["postprocessor_hooks"] = [postprocessor_hook]
     if ffmpeg_path:
         opciones["ffmpeg_location"] = ffmpeg_path
 
@@ -422,7 +452,7 @@ def _construir_opciones_descarga(url, carpeta, modo, calidad, subtitulos, playli
             opciones["postprocessors"] = [{
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "mp3",
-                "preferredquality": "192",
+                "preferredquality": calidad,
             }]
             opciones["prefer_ffmpeg"] = True
     else:
@@ -431,14 +461,14 @@ def _construir_opciones_descarga(url, carpeta, modo, calidad, subtitulos, playli
             opciones["merge_output_format"] = "mp4"
             opciones["prefer_ffmpeg"] = True
         else:
-            opciones["format"] = "best"
+            opciones["format"] = RESOLUCIONES_GENERICAS.get(calidad, RESOLUCIONES_GENERICAS["720p"])
             opciones["merge_output_format"] = "mp4"
             opciones["prefer_ffmpeg"] = True
 
     return opciones
 
 
-def descargar_musica(url, carpeta, modo, calidad, subtitulos=False, playlist=False, progress_callback=None, speed_callback=None, navegador=None, cancel_flag=None, ydl_holder=None):
+def descargar_musica(url, carpeta, modo, calidad, subtitulos=False, playlist=False, progress_callback=None, speed_callback=None, navegador=None, cancel_flag=None, ydl_holder=None, postprocessor_callback=None):
     plataforma = detectar_plataforma(url)
     try:
         os.makedirs(carpeta, exist_ok=True)
@@ -454,6 +484,7 @@ def descargar_musica(url, carpeta, modo, calidad, subtitulos=False, playlist=Fal
         opciones = _construir_opciones_descarga(
             url, carpeta, modo, calidad, subtitulos, playlist,
             progreso_callback=progress_callback, cancel_flag=cancel_flag,
+            postprocessor_callback=postprocessor_callback,
         )
         opciones.update(construir_opciones_cookies(navegador))
 

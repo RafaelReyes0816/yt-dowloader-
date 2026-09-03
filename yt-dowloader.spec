@@ -15,6 +15,8 @@ a = Analysis(
     ],
     hiddenimports=[
         'customtkinter',
+        'curl_cffi',
+        'curl_cffi.requests',
     ],
     hookspath=[],
     hooksconfig={},
