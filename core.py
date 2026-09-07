@@ -23,6 +23,32 @@ PLATFORM_REGEX = re.compile(
     r')'
 )
 
+_URL_COMPLETA_REGEX = re.compile(
+    r'(?:https?://)?(?:www\.)?(?:'
+    r'youtube\.com|youtu\.be|'
+    r'instagram\.com|instagr\.am|'
+    r'facebook\.com|fb\.watch|'
+    r'tiktok\.com|vm\.tiktok\.com|'
+    r'twitch\.tv|'
+    r'vimeo\.com|'
+    r'twitter\.com|x\.com|'
+    r'reddit\.com'
+    r')[^\s<>"\']*'
+)
+
+_TRAILING_URL_NO_VALIDO = ".,;:!?)]}\u00ab\u00bb\u201d\u201c\u2026"
+
+
+def extraer_url_completa(texto):
+    """Extrae una URL completa desde un texto/portapapeles, o None si no hay."""
+    if not texto:
+        return None
+    m = _URL_COMPLETA_REGEX.search(texto)
+    if not m:
+        return None
+    url = m.group(0)
+    return url.rstrip(_TRAILING_URL_NO_VALIDO) or None
+
 TIPOS_BLOQUEANTES = {
     "private", "members_only", "age_restricted", "sign_in", "geo",
     "unavailable", "not_found", "cookies", "bot",

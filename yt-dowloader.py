@@ -29,6 +29,7 @@ from core import (
     obtener_ultima_version_ytdlp,
     comparar_versiones,
     elegir_navegador_sesion,
+    extraer_url_completa,
 )
 
 from theme import (
@@ -312,13 +313,19 @@ class VentanaDiagnostico(ctk.CTkToplevel):
         self.geometry("560x520")
         self.minsize(480, 420)
         self.resizable(True, True)
-        self.transient(master)
-        self.grab_set()
         self.url = url.strip()
         self.navegador = navegador
         self.checks = {}
         self._build_ui()
+        self.lift()
+        self.focus_force()
         self.after(100, lambda: threading.Thread(target=self._run_checks, daemon=True).start())
+
+    def _guard_after(self, ms, fn):
+        try:
+            self.after(ms, fn)
+        except Exception:
+            pass
 
     def _build_ui(self):
         frame = ctk.CTkFrame(self, fg_color=COLORS["bg.surface"], corner_radius=RADII["card"])
@@ -366,7 +373,7 @@ class VentanaDiagnostico(ctk.CTkToplevel):
         return status
 
     def _set(self, check_id, estado, color):
-        self.after(0, lambda: self.checks[check_id].configure(text=estado, text_color=color))
+        self._guard_after(0, lambda: self.checks[check_id].configure(text=estado, text_color=color))
 
     def _run_checks(self):
         if self.url and PLATFORM_REGEX.search(self.url):
@@ -387,7 +394,7 @@ class VentanaDiagnostico(ctk.CTkToplevel):
             if latest and comparar_versiones(latest, version) > 0:
                 self._set("ytdlp", f"DESACTUALIZADO · v{version} · hay v{latest}",
                           COLORS["accent.error"])
-                self.after(0, lambda: self.btn_actualizar_ytdlp.pack(fill="x", padx=15, pady=(8, 0)))
+                self._guard_after(0, lambda: self.btn_actualizar_ytdlp.pack(fill="x", padx=15, pady=(8, 0)))
             elif latest:
                 self._set("ytdlp", f"v{version} · actualizado", COLORS["accent.success"])
             else:
@@ -416,7 +423,7 @@ class VentanaDiagnostico(ctk.CTkToplevel):
             detalle = (restriccion.get("detalle") or "").strip()
             if detalle:
                 texto += "\n\nDetalle técnico:\n" + detalle
-            self.after(0, lambda t=texto: self.detail_label.configure(text=t))
+            self._guard_after(0, lambda t=texto: self.detail_label.configure(text=t))
         elif resultado.get("info"):
             self._set("acceso", "OK · acceso público", COLORS["accent.success"])
         else:
@@ -452,18 +459,18 @@ class VentanaDiagnostico(ctk.CTkToplevel):
         if proc.returncode == 0 and instalada:
             self._set("ytdlp", f"v{instalada} · actualizado, reinicia la app",
                       COLORS["accent.success"])
-            self.after(0, lambda v=instalada: messagebox.showinfo(
+            self._guard_after(0, lambda v=instalada: messagebox.showinfo(
                 "Motor actualizado",
                 f"yt-dlp se actualizó a la v{v}.\n\nReinicia la aplicación para aplicar los cambios.",
             ))
         else:
             self._set("ytdlp", "ERROR · falló la actualización", COLORS["accent.error"])
             detalle = (proc.stderr or proc.stdout or "").strip()[-400:]
-            self.after(0, lambda d=detalle: messagebox.showerror(
+            self._guard_after(0, lambda d=detalle: messagebox.showerror(
                 "No se pudo actualizar",
                 f"Falló pip upgrade.\n\nDetalle técnico:\n{d}",
             ))
-        self.after(0, lambda: self.btn_actualizar_ytdlp.configure(state="normal"))
+        self._guard_after(0, lambda: self.btn_actualizar_ytdlp.configure(state="normal"))
 
 
 class App(ctk.CTk):
@@ -871,11 +878,11 @@ class App(ctk.CTk):
         if not self.clipboard_auto:
             return
         try:
-            clipboard = self.clipboard_get()
-            match = PLATFORM_REGEX.search(clipboard) if clipboard else None
-            if match and clipboard != self.url_entry.get():
+            clipboard = self.clipboard_get() or ""
+            url_completa = extraer_url_completa(clipboard)
+            if url_completa and url_completa != self.url_entry.get():
                 self.url_entry.delete(0, "end")
-                self.url_entry.insert(0, match.group(0))
+                self.url_entry.insert(0, url_completa)
         except Exception:
             pass
         self.after(2000, self._monitorear_clipboard)

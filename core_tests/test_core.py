@@ -17,6 +17,7 @@ from core import (
     verificar_url,
     cargar_preferencias,
     guardar_preferencias,
+    extraer_url_completa,
 )
 
 
@@ -355,3 +356,31 @@ class TestPreferenciasRoundtrip:
         monkeypatch.setattr(core_mod, "CONFIG_FILE", str(cfg_file))
         loaded = cargar_preferencias()
         assert loaded["modo"] == "audio"
+
+
+class TestExtraerUrlCompleta:
+    @pytest.mark.parametrize("texto,esperado", [
+        ("https://youtu.be/dQw4w9WgXcQ", "https://youtu.be/dQw4w9WgXcQ"),
+        ("https://www.youtube.com/watch?v=abc&t=30&list=x",
+         "https://www.youtube.com/watch?v=abc&t=30&list=x"),
+        ("Mira: https://www.instagram.com/reel/CxQ8A0gNfKV/ copialo",
+         "https://www.instagram.com/reel/CxQ8A0gNfKV/"),
+        ("https://www.tiktok.com/@u/video/123",
+         "https://www.tiktok.com/@u/video/123"),
+        ("https://youtu.be/abc.", "https://youtu.be/abc"),
+        ("(https://youtu.be/dQw4)", "https://youtu.be/dQw4"),
+        ("[https://youtu.be/dQw4]", "https://youtu.be/dQw4"),
+        ("{https://youtu.be/dQw4}", "https://youtu.be/dQw4"),
+        ("«https://vimeo.com/123»", "https://vimeo.com/123"),
+        ("Mira: https://youtu.be/dQw4…", "https://youtu.be/dQw4"),
+        ("www.x.com/user/status/123", "www.x.com/user/status/123"),
+    ])
+    def test_extrae_url_completa(self, texto, esperado):
+        assert extraer_url_completa(texto) == esperado
+
+    @pytest.mark.parametrize("texto", [
+        "", None, "solo texto sin url",
+        "https://ejemplo.com/video",
+    ])
+    def test_sin_url(self, texto):
+        assert extraer_url_completa(texto) is None
