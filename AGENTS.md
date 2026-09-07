@@ -34,7 +34,8 @@ git push origin v1.0.0
 
 ## Architecture
 
-- `yt-dowloader.py` — CustomTkinter UI (`App`, `VentanaDiagnostico`, `QueueCard`, `SegmentedControl`, `PillToggle`). Imports business logic from `core.py`.
+- `yt-dowloader.py` — CustomTkinter UI (`App`, `VentanaDiagnostico`, `QueueCard`, `SegmentedControl`, `PillToggle`, `Annunciador`, `SpinnerRing`). Imports business logic from `core.py`.
+- `theme.py` — design tokens (colors, fonts, radii) + `GLYPHS`. `Annunciador` shows transient HUD status (persistent while "working", auto-clear 4s otherwise); `SpinnerRing` is the indeterminate animated ring used for verification/conversion and diagnostics checks. All UI feedback is threaded through `self.after(0, ...)`.
 - `core.py` — pure business logic, no UI/network on import (testable): `PLATFORM_REGEX`, `extraer_url_completa` (extrae una URL completa —con query strings, parentesis y puntuacion limpiados— desde un texto/portapapeles), `detectar_plataforma`, `ClasificadorErrores`, `verificar_url`, `extraer_info_video`, `descargar_musica`, `find_ffmpeg`, prefs load/save, `comparar_versiones`, `elegir_navegador_sesion`, `PLATAFORMAS_CONFIG`, `RESOLUCIONES_YOUTUBE`. `Mi_musica/` folder is created at runtime as download target. `check_for_update()` queries GitHub Releases API.
 - Platforms (v3.0+): YouTube, Instagram, Facebook, TikTok, Twitch, Vimeo, Twitter/X (`twitter.com`/`x.com`), Reddit.
 - Filenames (v3.0+): YouTube downloads use `%(title)s [%(id)s].%(ext)s` to guarantee uniqueness; other platforms use `%(title)s.%(ext)s`.

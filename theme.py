@@ -44,6 +44,16 @@ COLORS = {
     "accent.success": "#35D499",
     "accent.progress": "#FFB454",
     "accent.error": "#FF5D5D",
+    "annunciator.bg": "#101827",
+    "annunciator.border": "#1B2438",
+}
+
+# Iconos monoespaciados del annunciador (cabina de vuelo)
+GLYPHS = {
+    "working": "⟳",
+    "ok": "✓",
+    "error": "!",
+    "info": "–",
 }
 
 FONTS = {

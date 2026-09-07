@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-__version__ = "3.1.0"
+__version__ = "3.2.0"
 
 import os
 import subprocess
@@ -37,6 +37,7 @@ from theme import (
     FONTS,
     SPACING,
     RADII,
+    GLYPHS,
     PLATAFORMA_BADGE,
     PLATAFORMA_INICIAL,
 )
@@ -60,6 +61,104 @@ ACCION_BOTON = {
     "cancelado": "Reintentar",
     "listo": "Restaurar",
 }
+
+
+class SpinnerRing(ctk.CTkFrame):
+    """Anillo indeterminado animado para estados de espera (verificando/convirtiendo)."""
+
+    def __init__(self, master, size=44, width=3, color=None, **kwargs):
+        super().__init__(master, fg_color="transparent", width=size, height=size, **kwargs)
+        self.size = size
+        self.width = width
+        self.color = color or COLORS["accent.progress"]
+        self._angle = 0
+        self._running = False
+        self._job = None
+        self.canvas = tkinter.Canvas(self, width=size, height=size,
+                                     bg=COLORS["bg.surface"], highlightthickness=0)
+        self.canvas.pack()
+
+    def start(self):
+        if not self._running:
+            self._running = True
+            self._step()
+
+    def stop(self):
+        self._running = False
+        if self._job is not None:
+            try:
+                self.after_cancel(self._job)
+            except Exception:
+                pass
+            self._job = None
+
+    def _step(self):
+        if not self._running or not self.winfo_exists():
+            return
+        r = self.size / 2 - self.width - 2
+        cx = cy = self.size / 2
+        self.canvas.delete("all")
+        self.canvas.create_oval(cx - r, cy - r, cx + r, cy + r,
+                                outline=COLORS["border.subtle"], width=self.width)
+        self.canvas.create_arc(cx - r, cy - r, cx + r, cy + r,
+                               start=self._angle, extent=110,
+                               outline=self.color, width=self.width, style="arc")
+        self._angle = (self._angle + 14) % 360
+        self._job = self.after(40, self._step)
+
+
+class Annunciador(ctk.CTkFrame):
+    """Franja de avisos tipo cabina de vuelo: lee el estado que dura y anuncia eventos."""
+
+    COLOR_TIPO = {
+        "working": COLORS["accent.progress"],
+        "ok": COLORS["accent.success"],
+        "error": COLORS["accent.error"],
+        "info": COLORS["text.secondary"],
+    }
+
+    def __init__(self, master):
+        super().__init__(master, fg_color=COLORS["annunciator.bg"], corner_radius=0, height=28)
+        self.grid_propagate(False)
+        self.grid_columnconfigure(1, weight=1)
+        self._hide_job = None
+
+        self.glyph_label = ctk.CTkLabel(self, text=GLYPHS["info"], font=FONTS["mono_small"],
+                                        width=22, text_color=COLORS["text.secondary"], anchor="w")
+        self.glyph_label.grid(row=0, column=0, sticky="w", padx=(14, 2), pady=4)
+
+        self.text_label = ctk.CTkLabel(self, text="LISTO", font=FONTS["mono_small"],
+                                       text_color=COLORS["text.secondary"], anchor="w")
+        self.text_label.grid(row=0, column=1, sticky="w", pady=4)
+
+    def notify(self, tipo, texto):
+        self.after(0, lambda: self._aplicar(tipo, texto))
+
+    def _aplicar(self, tipo, texto):
+        try:
+            color = self.COLOR_TIPO.get(tipo, COLORS["text.secondary"])
+            self.glyph_label.configure(text=GLYPHS.get(tipo, GLYPHS["info"]), text_color=color)
+            self.text_label.configure(text=str(texto).upper()[:90],
+                                      text_color=color if tipo in ("working", "ok", "error")
+                                      else COLORS["text.primary"])
+            if self._hide_job is not None:
+                try:
+                    self.after_cancel(self._hide_job)
+                except Exception:
+                    pass
+                self._hide_job = None
+            if tipo != "working":
+                self._hide_job = self.after(4000, self._clear)
+        except Exception:
+            pass
+
+    def _clear(self):
+        self._hide_job = None
+        try:
+            self.glyph_label.configure(text=GLYPHS["info"], text_color=COLORS["text.secondary"])
+            self.text_label.configure(text="LISTO", text_color=COLORS["text.secondary"])
+        except Exception:
+            pass
 
 
 class SegmentedControl(ctk.CTkFrame):
@@ -140,6 +239,10 @@ class QueueCard(ctk.CTkFrame):
         self.on_cancel = on_cancel
         self.on_retry = on_retry
         self.on_remove = on_remove
+        self._anim_job = None
+        self._angle = 0
+        self._phase = 0.0
+        self._anim_color = COLORS["accent.progress"]
 
         self.canvas = tkinter.Canvas(self, width=44, height=44,
                                      bg=COLORS["bg.surface"], highlightthickness=0)
@@ -243,6 +346,85 @@ class QueueCard(ctk.CTkFrame):
         self.canvas.create_text(cx, cy, text="!",
                                 fill=COLORS["accent.error"], font=FONTS["body_bold"])
 
+    # ---------- Animaciones de estado ----------
+    def _stop_anim(self):
+        if self._anim_job is not None:
+            try:
+                self.after_cancel(self._anim_job)
+            except Exception:
+                pass
+            self._anim_job = None
+
+    def _draw_check(self):
+        if not self.winfo_exists():
+            return
+        self.canvas.delete("all")
+        self.canvas.create_line(15, 23, 21, 29, 29, 19,
+                                fill=COLORS["accent.success"], width=3,
+                                capstyle="round", joinstyle="round")
+
+    def _spin_start(self, color=None):
+        self._stop_anim()
+        self._anim_color = color or COLORS["accent.progress"]
+        self._angle = 0
+        self._spin_loop()
+
+    def _spin_loop(self):
+        if not self.winfo_exists():
+            return
+        cx, cy, r = 22, 22, 15
+        self.canvas.delete("all")
+        self.canvas.create_oval(cx - r, cy - r, cx + r, cy + r,
+                                outline=COLORS["border.subtle"], width=3)
+        self.canvas.create_arc(cx - r, cy - r, cx + r, cy + r,
+                               start=self._angle, extent=110,
+                               outline=self._anim_color, width=3, style="arc")
+        self._angle = (self._angle + 14) % 360
+        self._anim_job = self.after(40, self._spin_loop)
+
+    def _pulse_start(self, color=None):
+        self._stop_anim()
+        self._anim_color = color or COLORS["accent.progress"]
+        self._phase = 0
+        self._pulse_loop()
+
+    def _pulse_loop(self):
+        if not self.winfo_exists():
+            return
+        cx, cy, r = 22, 22, 15
+        self.canvas.delete("all")
+        self.canvas.create_oval(cx - r, cy - r, cx + r, cy + r,
+                                outline=COLORS["border.subtle"], width=3)
+        t = self._phase % 24
+        extent = 40 + int((t if t < 12 else 24 - t) / 11 * 80)
+        self.canvas.create_arc(cx - r, cy - r, cx + r, cy + r,
+                               start=90, extent=-extent,
+                               outline=self._anim_color, width=3, style="arc")
+        self._phase += 1
+        self._anim_job = self.after(40, self._pulse_loop)
+
+    def _animar_listo_start(self):
+        self._stop_anim()
+        self._phase = 0.0
+        self._animar_listo()
+
+    def _animar_listo(self):
+        if not self.winfo_exists():
+            return
+        cx, cy, r = 22, 22, 15
+        pct = min(1.0, self._phase)
+        if pct < 1.0:
+            self.canvas.delete("all")
+            self.canvas.create_oval(cx - r, cy - r, cx + r, cy + r,
+                                    outline=COLORS["border.subtle"], width=3)
+            self.canvas.create_arc(cx - r, cy - r, cx + r, cy + r,
+                                   start=90, extent=-max(1, int(pct * 360)),
+                                   outline=COLORS["accent.success"], width=3, style="arc")
+            self._phase = min(1.0, pct + 0.10)
+            self._anim_job = self.after(30, self._animar_listo)
+        else:
+            self._draw_check()
+
     def update_progress(self, pct):
         self.progress_value = pct
 
@@ -285,21 +467,33 @@ class QueueCard(ctk.CTkFrame):
         def _f():
             if not self.winfo_exists():
                 return
+            self._stop_anim()
             self.status_label.configure(text=texto, text_color=color)
             if estado == "listo":
-                self._draw_ring(1.0, COLORS["accent.success"])
                 self.micro_bar.set(1.0)
                 self.configure(border_width=2, border_color=COLORS["accent.success"])
+                self._animar_listo_start()
             elif estado == "error":
                 self._draw_error_icon()
                 self.configure(border_width=2, border_color=COLORS["accent.error"])
             elif estado == "cancelado":
                 self._draw_ring(self.progress_value, COLORS["border.subtle"])
                 self.configure(border_width=0)
-            else:
-                self._draw_ring(self.progress_value)
+            elif estado in ("verificando", "convirtiendo"):
+                self.micro_bar.set(0.0)
                 self.configure(border_width=0)
-            self.action_btn.configure(text=ACCION_BOTON.get(estado, "Cancelar"))
+                if estado == "convirtiendo":
+                    self._pulse_start()
+                else:
+                    self._spin_start()
+            elif estado == "descargando":
+                self.micro_bar.set(0.0)
+                self.configure(border_width=0)
+                self._draw_ring(self.progress_value)
+            else:
+                self.micro_bar.set(0.0)
+                self.configure(border_width=0)
+                self._draw_ring(self.progress_value)
         self.after(0, _f)
 
     def set_estado(self, estado):
@@ -339,11 +533,12 @@ class VentanaDiagnostico(ctk.CTkToplevel):
         self.checks_list = ctk.CTkFrame(frame, fg_color="transparent")
         self.checks_list.pack(fill="x", padx=15)
 
-        self.checks["url"] = self._crear_check("URL")
-        self.checks["ffmpeg"] = self._crear_check("FFmpeg")
-        self.checks["ytdlp"] = self._crear_check("yt-dlp")
-        self.checks["navegador"] = self._crear_check("Navegador")
-        self.checks["acceso"] = self._crear_check("Acceso al contenido")
+        self._check_spinners = {}
+        self.checks["url"] = self._crear_check("url", "URL")
+        self.checks["ffmpeg"] = self._crear_check("ffmpeg", "FFmpeg")
+        self.checks["ytdlp"] = self._crear_check("ytdlp", "yt-dlp")
+        self.checks["navegador"] = self._crear_check("navegador", "Navegador")
+        self.checks["acceso"] = self._crear_check("acceso", "Acceso al contenido")
 
         detalle_scroll = ctk.CTkScrollableFrame(frame, fg_color=COLORS["bg.base"],
                                                 corner_radius=8, height=150)
@@ -362,18 +557,36 @@ class VentanaDiagnostico(ctk.CTkToplevel):
             command=self._actualizar_motor,
         )
 
-    def _crear_check(self, titulo):
+    def _crear_check(self, check_id, titulo):
         row = ctk.CTkFrame(self.checks_list, fg_color="transparent")
         row.pack(fill="x", pady=3)
         ctk.CTkLabel(row, text=titulo, font=FONTS["body_bold"],
                      text_color=COLORS["text.primary"], width=170, anchor="w").pack(side="left")
-        status = ctk.CTkLabel(row, text="· Analizando...", font=FONTS["small"],
+        spinner = SpinnerRing(row, size=16, width=2)
+        spinner.pack(side="right")
+        spinner.start()
+        self._check_spinners[check_id] = spinner
+        status = ctk.CTkLabel(row, text="", font=FONTS["small"],
                               text_color=COLORS["text.secondary"])
         status.pack(side="right")
         return status
 
     def _set(self, check_id, estado, color):
-        self._guard_after(0, lambda: self.checks[check_id].configure(text=estado, text_color=color))
+        def _f():
+            try:
+                if not self.winfo_exists():
+                    return
+                spinner = self._check_spinners.get(check_id)
+                if spinner is not None:
+                    spinner.stop()
+                    try:
+                        spinner.pack_forget()
+                    except Exception:
+                        pass
+                self.checks[check_id].configure(text=estado, text_color=color)
+            except Exception:
+                pass
+        self._guard_after(0, _f)
 
     def _run_checks(self):
         if self.url and PLATFORM_REGEX.search(self.url):
@@ -530,13 +743,18 @@ class App(ctk.CTk):
 
     def _build_ui(self):
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(3, weight=1)
+        self.grid_rowconfigure(4, weight=1)
 
         self._build_header()
+        self._build_annunciador()
         self._build_input()
         self._build_options()
         self._build_cola()
         self._build_statusbar()
+
+    def _build_annunciador(self):
+        self.annunciador = Annunciador(self)
+        self.annunciador.grid(row=1, column=0, sticky="ew", padx=0, pady=0)
 
     # ---------- Header ----------
     def _build_header(self):
@@ -569,7 +787,7 @@ class App(ctk.CTk):
     # ---------- Input ----------
     def _build_input(self):
         url_frame = ctk.CTkFrame(self, fg_color=COLORS["bg.surface"], corner_radius=RADII["card"])
-        url_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=(15, 10))
+        url_frame.grid(row=2, column=0, sticky="ew", padx=20, pady=(15, 10))
         url_frame.grid_columnconfigure(0, weight=1)
 
         url_row = ctk.CTkFrame(url_frame, fg_color="transparent")
@@ -588,16 +806,54 @@ class App(ctk.CTk):
                                       placeholder_text_color=COLORS["text.secondary"])
         self.url_entry.grid(row=0, column=1, sticky="ew", padx=(0, 10))
         self.url_entry.focus()
+        self.url_entry.bind("<Return>", lambda _e: self._agregar_a_cola())
+        self.url_entry.bind("<KeyRelease>", lambda _e: self._programar_validacion_inline())
+        self.url_entry.bind("<FocusIn>", lambda _e: self.url_entry.configure(border_color=COLORS["accent.brand"]))
+        self.url_entry.bind("<FocusOut>", lambda _e: self.url_entry.configure(border_color=COLORS["border.subtle"]))
 
-        ctk.CTkButton(url_row, text="Agregar", command=self._agregar_a_cola, width=90, height=40,
-                      font=FONTS["body_bold"],
-                      fg_color=COLORS["accent.brand"], hover_color=COLORS["accent.brand-hover"],
-                      text_color=COLORS["text.primary"]).grid(row=0, column=2)
+        self.url_hint = ctk.CTkLabel(url_frame, text="", font=FONTS["mono_small"],
+                                     text_color=COLORS["text.secondary"], anchor="w")
+
+        self.btn_agregar = ctk.CTkButton(url_row, text="Agregar", command=self._agregar_a_cola,
+                                         width=90, height=40, font=FONTS["body_bold"],
+                                         fg_color=COLORS["accent.brand"], hover_color=COLORS["accent.brand-hover"],
+                                         text_color=COLORS["text.primary"])
+        self.btn_agregar.grid(row=0, column=2)
+
+    def _programar_validacion_inline(self):
+        if hasattr(self, "_val_job") and self._val_job is not None:
+            try:
+                self.after_cancel(self._val_job)
+            except Exception:
+                pass
+        self._val_job = self.after(300, self._actualizar_validacion_inline)
+
+    def _actualizar_validacion_inline(self):
+        self._val_job = None
+        texto = self.url_entry.get().strip()
+        if texto and PLATFORM_REGEX.search(texto):
+            plataforma = detectar_plataforma(texto)
+            if plataforma != "Otra":
+                self._show_url_hint(f"✓ {plataforma}", COLORS["accent.success"])
+                return True
+        self._clear_url_hint()
+        return False
+
+    def _show_url_hint(self, texto, color):
+        if not hasattr(self, "url_hint"):
+            return
+        self.url_hint.configure(text=texto, text_color=color)
+        if not self.url_hint.winfo_manager():
+            self.url_hint.grid(row=1, column=0, sticky="w", padx=(34, 0), pady=(0, 8))
+
+    def _clear_url_hint(self):
+        if hasattr(self, "url_hint"):
+            self.url_hint.grid_forget()
 
     # ---------- Options ----------
     def _build_options(self):
         opt_frame = ctk.CTkFrame(self, fg_color=COLORS["bg.surface"], corner_radius=RADII["card"])
-        opt_frame.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 10))
+        opt_frame.grid(row=3, column=0, sticky="ew", padx=20, pady=(0, 10))
         opt_frame.grid_columnconfigure(0, weight=1)
 
         row1 = ctk.CTkFrame(opt_frame, fg_color="transparent")
@@ -700,7 +956,7 @@ class App(ctk.CTk):
     # ---------- Cola ----------
     def _build_cola(self):
         cola_frame = ctk.CTkFrame(self, fg_color=COLORS["bg.surface"], corner_radius=RADII["card"])
-        cola_frame.grid(row=3, column=0, sticky="nsew", padx=20, pady=(0, 10))
+        cola_frame.grid(row=4, column=0, sticky="nsew", padx=20, pady=(0, 10))
         cola_frame.grid_columnconfigure(0, weight=1)
         cola_frame.grid_rowconfigure(1, weight=1)
 
@@ -785,15 +1041,32 @@ class App(ctk.CTk):
         self.empty_state_frame = ctk.CTkFrame(self.cola_scroll, fg_color="transparent")
         self.empty_state_frame.grid(row=0, column=0, sticky="nsew", pady=60)
         self.empty_state_frame.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(self.empty_state_frame, text="◦", font=(FONTS["display"][0], 40),
-                     text_color=COLORS["border.subtle"]).grid(row=0, column=0)
-        ctk.CTkLabel(self.empty_state_frame, text="Pega una URL arriba para empezar",
-                     font=FONTS["body"], text_color=COLORS["text.secondary"]).grid(row=1, column=0, pady=(8, 0))
+
+        il_canvas = tkinter.Canvas(self.empty_state_frame, width=72, height=64,
+                                    bg=COLORS["bg.base"], highlightthickness=0)
+        il_canvas.grid(row=0, column=0)
+        color_flecha = COLORS["accent.progress"]
+        color_bandeja = COLORS["border.subtle"]
+        il_canvas.create_line(36, 10, 36, 34, fill=color_flecha, width=3, capstyle="round")
+        il_canvas.create_line(28, 26, 36, 34, fill=color_flecha, width=3, capstyle="round")
+        il_canvas.create_line(44, 26, 36, 34, fill=color_flecha, width=3, capstyle="round")
+        il_canvas.create_line(20, 42, 54, 42, fill=color_bandeja, width=3, capstyle="round")
+        il_canvas.create_line(26, 47, 26, 42, fill=color_bandeja, width=3, capstyle="round")
+        il_canvas.create_line(46, 47, 46, 42, fill=color_bandeja, width=3, capstyle="round")
+
+        ctk.CTkLabel(self.empty_state_frame, text="La cola está vacía",
+                     font=FONTS["body_bold"], text_color=COLORS["text.primary"]
+                     ).grid(row=1, column=0, pady=(14, 2))
+        ctk.CTkLabel(self.empty_state_frame,
+                     text="Pega una URL arriba y presiona Agregar.\n"
+                          "YouTube · Instagram · TikTok · Facebook · Twitch · Vimeo · X · Reddit",
+                     font=FONTS["small"], text_color=COLORS["text.secondary"], justify="center"
+                     ).grid(row=2, column=0, pady=(0, 0))
 
     # ---------- Status bar ----------
     def _build_statusbar(self):
         status_bar = ctk.CTkFrame(self, fg_color=COLORS["bg.surface"], corner_radius=0, height=38)
-        status_bar.grid(row=4, column=0, sticky="ew", padx=0, pady=0)
+        status_bar.grid(row=5, column=0, sticky="ew", padx=0, pady=0)
         status_bar.grid_columnconfigure(1, weight=1)
 
         self.estado_var = ctk.StringVar(value="Listo")
@@ -883,6 +1156,8 @@ class App(ctk.CTk):
             if url_completa and url_completa != self.url_entry.get():
                 self.url_entry.delete(0, "end")
                 self.url_entry.insert(0, url_completa)
+                self._actualizar_validacion_inline()
+                self.annunciador.notify("info", "Auto-URL detectada")
         except Exception:
             pass
         self.after(2000, self._monitorear_clipboard)
@@ -963,13 +1238,14 @@ class App(ctk.CTk):
     def _agregar_a_cola(self):
         url = self.url_entry.get().strip()
         if not url:
-            messagebox.showwarning("Sin URL", "Pega una URL en el campo de arriba.")
+            self._show_url_hint("PEGA UNA URL PARA EMPEZAR", COLORS["accent.error"])
+            self.url_entry.focus()
             return
 
         if not PLATFORM_REGEX.search(url):
-            messagebox.showwarning("URL no compatible",
-                                   "Esta URL no es de una plataforma compatible.\n\n"
-                                   "Plataformas: YouTube, Instagram, TikTok, Facebook, Twitch, Vimeo, X, Reddit.")
+            self._show_url_hint("URL NO COMPATIBLE · YOUTUBE, INSTAGRAM, TIKTOK, FACEBOOK, TWITCH, VIMEO, X, REDDIT",
+                                COLORS["accent.error"])
+            self.url_entry.focus()
             return
 
         plataforma = detectar_plataforma(url)
@@ -982,7 +1258,7 @@ class App(ctk.CTk):
 
         for existente in self.queue_items:
             if existente["url"] == url:
-                messagebox.showinfo("Ya en cola", "Esa URL ya está en la cola de descargas.")
+                self._show_url_hint("YA ESTÁ EN COLA", COLORS["accent.progress"])
                 return
 
         item = {
@@ -1013,16 +1289,24 @@ class App(ctk.CTk):
         self._actualizar_counter()
         self._guardar_prefs_actuales()
         self._log(f"Agregado: {url}")
+        self.annunciador.notify("ok", f"Añadido · {plataforma}")
 
         self.url_entry.delete(0, "end")
+        self._clear_url_hint()
+        self.url_entry.focus()
+
+        self.btn_agregar.configure(state="disabled", text="…")
+        self.after(600, lambda: self.btn_agregar.configure(state="normal", text="Agregar"))
 
     # ---------- Cancel / Stop ----------
     def _cancelar_item(self, item):
         item["cancel_flag"].set()
         if item["estado"] == "en_cola":
             self._set_estado(item, "cancelado")
+            self.annunciador.notify("info", "Cancelado de la cola")
         else:
             self._log(f"Cancelando: {item['url']}")
+            self.annunciador.notify("working", "Cancelando…")
 
     def _cancelar_item_fuerte(self, item):
         item["cancel_flag"].set()
@@ -1039,6 +1323,7 @@ class App(ctk.CTk):
         for item in self.queue_items:
             self._cancelar_item_fuerte(item)
         self._log("Solicitado detener todas las descargas.")
+        self.annunciador.notify("info", "Deteniendo todas las descargas…")
 
     # ---------- Iniciar cola ----------
     def _iniciar_cola(self):
@@ -1047,7 +1332,7 @@ class App(ctk.CTk):
 
         pending = [item for item in self.queue_items if item["estado"] == "en_cola"]
         if not pending:
-            messagebox.showinfo("Cola vacía", "Agrega videos a la cola primero.")
+            self.annunciador.notify("info", "Cola vacía · agrega una URL arriba")
             return
 
         self.stop_all.clear()
@@ -1084,6 +1369,10 @@ class App(ctk.CTk):
                             fut.result()
                         except Exception as e:
                             self._log(f"Error interno de hilo: {e}")
+            if self.stop_all.is_set():
+                self.annunciador.notify("info", "Detenido por el usuario")
+            else:
+                self.annunciador.notify("ok", "Cola finalizada")
         finally:
             self.is_downloading = False
             self.stop_all.clear()
@@ -1106,6 +1395,7 @@ class App(ctk.CTk):
 
         self._set_estado(item, "verificando")
         self._log(f"Verificando {idx + 1} de {total}: {item['url']}")
+        self.annunciador.notify("working", f"Verificando {idx + 1} de {total}")
 
         precheck = verificar_url(item["url"], navegador_actual, item["cancel_flag"])
         restriccion = precheck.get("restriccion")
@@ -1114,6 +1404,7 @@ class App(ctk.CTk):
         if tipo == "cancelada" or item["cancel_flag"].is_set() or self.stop_all.is_set():
             self._set_estado(item, "cancelado")
             self._log(f"Cancelado durante verificación: {item['url']}")
+            self.annunciador.notify("info", "Verificación cancelada")
             return
 
         if tipo in TIPOS_BLOQUEANTES and tipo not in TIPOS_REINTENTO_SESION:
@@ -1126,6 +1417,7 @@ class App(ctk.CTk):
             if hasattr(card, "set_error_detalle"):
                 self.after(0, lambda m=mensaje: card.set_error_detalle(m))
             self._log(f"Error en {item['url']}: {restriccion['mensaje']}")
+            self.annunciador.notify("error", f"Bloqueado · {restriccion['mensaje'][:60]}")
             self.after(0, lambda m=mensaje: self._mostrar_error_amigable(m))
             return
 
@@ -1139,6 +1431,7 @@ class App(ctk.CTk):
 
         self._set_estado(item, "descargando")
         self._log(f"Descargando {idx + 1} de {total}: {item['url']}")
+        self.annunciador.notify("working", f"Descargando {idx + 1} de {total}")
 
         def on_progress(val):
             self.after(0, lambda v=val: item["card"].update_progress(v))
@@ -1157,6 +1450,7 @@ class App(ctk.CTk):
                 self._set_estado(item, "convirtiendo")
                 self.after(0, lambda: item["card"].set_metricas("", ""))
                 self._log(f"Convirtiendo a mp3/mp4: {item['titulo'] or item['url']}")
+                self.annunciador.notify("working", "Convirtiendo a mp3/mp4")
 
         exito, mensaje, tipo_fallo = descargar_musica(
             item["url"],
@@ -1176,6 +1470,7 @@ class App(ctk.CTk):
         if exito is False and tipo_fallo == "cancelada":
             self._set_estado(item, "cancelado")
             self._log(f"Cancelado: {item['url']}")
+            self.annunciador.notify("info", "Descarga cancelada")
             return
 
         if not exito and tipo_fallo in TIPOS_REINTENTO_SESION and not navegador_actual:
@@ -1183,6 +1478,7 @@ class App(ctk.CTk):
             if nav:
                 self._set_estado(item, "verificando")
                 self._log(f"Reintentando con sesión de {nav.capitalize()}: {item['url']}")
+                self.annunciador.notify("working", f"Reintento con {nav.capitalize()}")
                 exito, mensaje, tipo_fallo = descargar_musica(
                     item["url"],
                     item["carpeta"],
@@ -1200,15 +1496,18 @@ class App(ctk.CTk):
                 if exito is False and tipo_fallo == "cancelada":
                     self._set_estado(item, "cancelado")
                     self._log(f"Cancelado: {item['url']}")
+                    self.annunciador.notify("info", "Descarga cancelada")
                     return
 
         if exito:
             self._set_estado(item, "listo")
             self.after(0, lambda: item["card"].set_metricas("", ""))
             self._log(f"Descarga completada: {item['titulo'] or item['url']}")
+            self.annunciador.notify("ok", f"Listo · {item['titulo'] or item['url']}")
         else:
             self._set_estado(item, "error")
             self._log(f"Error en {item['url']}: {mensaje.splitlines()[0] if mensaje else 'desconocido'}")
+            self.annunciador.notify("error", "Error en la descarga")
             self.after(0, lambda m=mensaje: self._mostrar_error_amigable(m))
 
     def _mostrar_error_amigable(self, mensaje):
@@ -1224,6 +1523,7 @@ class App(ctk.CTk):
         self.after(0, lambda: item["card"].set_estado("en_cola"))
         self.after(0, lambda: item["card"].set_metricas("", ""))
         self._log(f"Reintentando: {item['url']}")
+        self.annunciador.notify("info", "Reintentando…")
 
         if self.is_downloading:
             self._toggle_empty_state()
@@ -1266,6 +1566,7 @@ class App(ctk.CTk):
         self._toggle_empty_state()
         self._actualizar_consola()
         self._log("Cola limpiada.")
+        self.annunciador.notify("info", "Cola vaciada")
 
     def _abrir_diagnostico(self):
         url = self.url_entry.get().strip()
@@ -1279,9 +1580,12 @@ class App(ctk.CTk):
     # ---------- Update ----------
     def _check_update_async(self):
         def run():
-            has_update, latest, url = check_for_update(__version__)
-            if has_update:
-                self.after(0, lambda: self._show_update(latest, url))
+            try:
+                has_update, latest, url = check_for_update(__version__)
+                if has_update:
+                    self.after(0, lambda: self._show_update(latest, url))
+            except Exception:
+                pass
         threading.Thread(target=run, daemon=True).start()
 
     def _show_update(self, latest, url):
