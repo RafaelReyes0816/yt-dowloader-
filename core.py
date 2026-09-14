@@ -38,6 +38,28 @@ _URL_COMPLETA_REGEX = re.compile(
 
 _TRAILING_URL_NO_VALIDO = ".,;:!?)]}\u00ab\u00bb\u201d\u201c\u2026"
 
+_URL_GENERICA_REGEX = re.compile(
+    r"(?:https?://[^\s<>\"']+|"
+    r"(?:www\.)?(?:youtube\.com|youtu\.be|instagram\.com|instagr\.am|facebook\.com|fb\.watch|"
+    r"tiktok\.com|vm\.tiktok\.com|twitch\.tv|vimeo\.com|twitter\.com|x\.com|reddit\.com)"
+    r"[^\s<>\"']*)"
+)
+_PARAMETRO_SENSIBLE_REGEX = re.compile(
+    r"((?:access_?token|token|code|key|signature|sig|sessionid|api[_-]?key)=)[^\s&\"']+",
+    re.IGNORECASE,
+)
+
+
+_CONTROL_REGEX = re.compile(r"[\x00-\x1f\x7f\u200b-\u200f\u2060\ufeff]+")
+
+
+def sanear_texto_clipboard(texto):
+    """Limpia caracteres de control y normaliza espacios antes de extraer una URL."""
+    if not texto:
+        return ""
+    limpio = _CONTROL_REGEX.sub(" ", str(texto))
+    return re.sub(r"\s+", " ", limpio).strip()
+
 
 def extraer_url_completa(texto):
     """Extrae una URL completa desde un texto/portapapeles, o None si no hay."""
@@ -48,6 +70,43 @@ def extraer_url_completa(texto):
         return None
     url = m.group(0)
     return url.rstrip(_TRAILING_URL_NO_VALIDO) or None
+
+
+def enmascarar_url(url):
+    """Devuelve una version segura de la URL para mostrar en la UI (solo host)."""
+    if not url:
+        return ""
+    sin_esquema = re.sub(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", "", url.strip())
+    if "@" in sin_esquema.split("/", 1)[0]:
+        sin_esquema = sin_esquema.split("@", 1)[-1]
+    partes = re.split(r"[/?#]", sin_esquema, maxsplit=1)
+    host = partes[0]
+    if host.startswith("www."):
+        host = host[4:]
+    if len(partes) == 2 and partes[1].strip("?"):
+        return host + "/\u00b7\u00b7\u00b7"
+    return host
+
+
+def enmascarar_texto(texto):
+    """Enmascara cualquier URL y elimina parametros sensibles dentro de un texto."""
+    if not texto:
+        return ""
+    limpio = _URL_GENERICA_REGEX.sub(
+        lambda m: enmascarar_url(m.group(0)), str(texto)
+    )
+    limpio = _PARAMETRO_SENSIBLE_REGEX.sub(
+        lambda m: m.group(1) + "\u2026", limpio
+    )
+    return limpio.strip()
+
+
+def sanitizar_detalle(texto):
+    """Elimina informacion sensible (tokens, query strings) de un mensaje tecnico."""
+    limpio = enmascarar_texto(texto)
+    if len(limpio) > 400:
+        limpio = limpio[:400] + "..."
+    return limpio
 
 TIPOS_BLOQUEANTES = {
     "private", "members_only", "age_restricted", "sign_in", "geo",
@@ -109,6 +168,9 @@ RESOLUCIONES_GENERICAS = {
     "1440p": "bestvideo[height<=1440]+bestaudio/best[height<=1440]/best",
     "2160p": "bestvideo[height<=2160]+bestaudio/best[height<=2160]/best",
 }
+
+CALIDADES_AUDIO = ["128", "192", "256", "320"]
+CALIDADES_VIDEO = list(RESOLUCIONES_YOUTUBE.keys())
 
 PLATAFORMAS_CONFIG = {
     "YouTube": {
@@ -296,9 +358,7 @@ class ClasificadorErrores:
     def clasificar(cls, exc, plataforma):
         texto = str(exc)
         msg = texto.lower()
-        detalle = texto.strip()
-        if len(detalle) > 400:
-            detalle = detalle[:400] + "..."
+        detalle = sanitizar_detalle(texto)
         for tipo, patron in cls.PATRONES:
             if re.search(patron, msg):
                 return {
@@ -338,19 +398,23 @@ def cargar_preferencias():
         "usar_sesion_navegador": False,
         "navegador": "",
         "max_paralelas": 1,
+        "ocultar_urls": True,
     }
     try:
         if os.path.isfile(CONFIG_FILE):
             with open(CONFIG_FILE, "r") as f:
                 saved = json.load(f)
-            defaults.update(saved)
+            if isinstance(saved, dict):
+                defaults.update(saved)
     except Exception:
         pass
+    defaults.pop("tema", None)
     return defaults
 
 
 def guardar_preferencias(prefs):
     try:
+        prefs.pop("tema", None)
         os.makedirs(CONFIG_DIR, exist_ok=True)
         with open(CONFIG_FILE, "w") as f:
             json.dump(prefs, f, indent=2)

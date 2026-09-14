@@ -18,7 +18,11 @@ from core import (
     cargar_preferencias,
     guardar_preferencias,
     extraer_url_completa,
+    enmascarar_url,
+    sanitizar_detalle,
+    sanear_texto_clipboard,
 )
+from core import CALIDADES_AUDIO, CALIDADES_VIDEO
 
 
 class TestDetectarPlataforma:
@@ -384,3 +388,148 @@ class TestExtraerUrlCompleta:
     ])
     def test_sin_url(self, texto):
         assert extraer_url_completa(texto) is None
+
+
+class TestEnmascararUrl:
+    @pytest.mark.parametrize("url,esperado", [
+        ("https://www.youtube.com/watch?v=abc123&t=30", "youtube.com/···"),
+        ("https://youtu.be/dQw4w9WgXcQ", "youtu.be/···"),
+        ("youtube.com/watch?v=x", "youtube.com/···"),
+        ("https://www.instagram.com/reel/CxQ8/", "instagram.com/···"),
+        ("https://vimeo.com/123456", "vimeo.com/···"),
+        ("https://twitter.com/user/status/1", "twitter.com/···"),
+        ("https://www.reddit.com/r/x/comments/1/", "reddit.com/···"),
+        ("https://vimeo.com/", "vimeo.com"),
+        ("https://youtu.be", "youtu.be"),
+        ("", ""),
+        (None, ""),
+    ])
+    def test_enmascara(self, url, esperado):
+        assert enmascarar_url(url) == esperado
+
+    @pytest.mark.parametrize("url", [
+        "https://youtube.com/watch?v=abc",
+        "youtu.be/test?id=1&token=SECRET",
+        "https://instagram.com/stories/user/123",
+    ])
+    def test_nunca_expone_ruta_o_query(self, url):
+        mascara = enmascarar_url(url)
+        assert "watch" not in mascara
+        assert "token" not in mascara
+        assert "=" not in mascara
+        assert "/" not in mascara.replace("/···", "", 1)
+
+
+class TestSanitizarDetalle:
+    def test_enmascara_urls_dentro_de_texto(self):
+        detalle = "ERROR: [youtube] https://youtube.com/watch?v=abc&token=X no se pudo"
+        result = sanitizar_detalle(detalle)
+        assert "youtube.com/···" in result
+        assert "watch" not in result
+        assert "token=X" not in result
+
+    def test_enmascara_urls_sin_esquema(self):
+        detalle = "Error en youtube.com/watch?v=abc y en tiktok.com/@u/video/1"
+        result = sanitizar_detalle(detalle)
+        assert "youtube.com/···" in result
+        assert "tiktok.com/···" in result
+        assert "watch" not in result
+
+    @pytest.mark.parametrize("texto", [
+        "Sign in to confirm your age here",
+        "This video is private",
+        "Some odd error here",
+    ])
+    def test_conserva_texto_clave(self, texto):
+        assert sanitizar_detalle(texto) == texto
+
+    def test_limpia_parametros_tipo_token(self):
+        detalle = "Failed with access_token=abc123&sig=deadbeef final"
+        result = sanitizar_detalle(detalle)
+        assert "abc123" not in result
+        assert "sig=deadbeef" not in result
+        assert "Failed with" in result
+
+    def test_trunca_a_404(self):
+        largo = "x" * 1000
+        result = sanitizar_detalle("some error " + largo)
+        assert len(result) <= 404
+
+    def test_vacio_y_none(self):
+        assert sanitizar_detalle("") == ""
+        assert sanitizar_detalle(None) == ""
+
+
+class TestConstantesCalidades:
+    def test_audio_coincide_con_config_youtube(self):
+        assert CALIDADES_AUDIO == ["128", "192", "256", "320"]
+
+    def test_video_deriva_de_resoluciones(self):
+        assert CALIDADES_VIDEO == list(RESOLUCIONES_YOUTUBE.keys())
+        assert "2160p" in CALIDADES_VIDEO
+
+
+class TestPrefsLimpiaTema:
+    def test_guardar_elimina_clave_legacy_tema(self, monkeypatch, tmp_path):
+        import core as core_mod
+        import json
+        cfg = tmp_path / "cfg"
+        monkeypatch.setattr(core_mod, "CONFIG_DIR", str(cfg))
+        monkeypatch.setattr(core_mod, "CONFIG_FILE", str(cfg / "config.json"))
+        prefs = {"modo": "audio", "tema": "dark", "ocultar_urls": True}
+        guardar_preferencias(prefs)
+        guardado = json.loads((cfg / "config.json").read_text())
+        assert "tema" not in guardado
+        assert guardado["ocultar_urls"] is True
+
+    def test_cargar_ignora_tema(self, monkeypatch, tmp_path):
+        import core as core_mod
+        import json
+        cfg = tmp_path / "cfg"
+        cfg.mkdir()
+        cfg_file = cfg / "config.json"
+        cfg_file.write_text(json.dumps({"modo": "video", "tema": "dark"}))
+        monkeypatch.setattr(core_mod, "CONFIG_DIR", str(cfg))
+        monkeypatch.setattr(core_mod, "CONFIG_FILE", str(cfg_file))
+        loaded = cargar_preferencias()
+        assert "tema" not in loaded
+        assert loaded["modo"] == "video"
+
+
+class TestSanearClipboard:
+    def test_quita_controles(self):
+        assert sanear_texto_clipboard(
+            "https://youtu.be/abc\x00\x0b\x1fdef") == "https://youtu.be/abc def"
+
+    def test_normaliza_whitespace(self):
+        assert sanear_texto_clipboard(
+            "  \n\thttps://youtu.be/abc \n\n  basura ") == "https://youtu.be/abc basura"
+
+    def test_quita_bom_y_anchos_cero(self):
+        assert sanear_texto_clipboard(
+            "\ufeffhttps://youtu.be/abc\u200b\u200c") == "https://youtu.be/abc"
+
+    def test_vacio_y_none(self):
+        assert sanear_texto_clipboard("") == ""
+        assert sanear_texto_clipboard(None) == ""
+        assert sanear_texto_clipboard("   \n ") == ""
+
+
+class TestPreferenciasOcultarUrls:
+    def test_default_ocultar_urls_true(self, monkeypatch, tmp_path):
+        import core as core_mod
+        cfg = tmp_path / "cfg"
+        monkeypatch.setattr(core_mod, "CONFIG_DIR", str(cfg))
+        monkeypatch.setattr(core_mod, "CONFIG_FILE", str(cfg / "config.json"))
+        loaded = cargar_preferencias()
+        assert loaded["ocultar_urls"] is True
+
+    def test_roundtrip_conserva_ocultar_urls(self, monkeypatch, tmp_path):
+        import core as core_mod
+        cfg = tmp_path / "cfg"
+        monkeypatch.setattr(core_mod, "CONFIG_DIR", str(cfg))
+        monkeypatch.setattr(core_mod, "CONFIG_FILE", str(cfg / "config.json"))
+        prefs = {"modo": "video", "ocultar_urls": False}
+        guardar_preferencias(prefs)
+        loaded = cargar_preferencias()
+        assert loaded["ocultar_urls"] is False
