@@ -15,14 +15,14 @@
 
 ## 1. Checkpoint — dónde estamos
 
-- **Última release: v3.3.0** (commit `0343e25`, tag `v3.3.0` pusheado a `master` de GitHub, repo `RafaelReyes0816/yt-dowloader-`). El CI de GitHub Actions (`.github/workflows/build.yml`) se dispara en tag push `v*` y publica ejecutables de Linux/Windows/macOS con `softprops/action-gh-release`.
+- **Última release: v3.3.1** (commit `2cb32a8`, tag `v3.3.1` pusheado a `master` de GitHub, repo `RafaelReyes0816/yt-dowloader-`). El CI de GitHub Actions (`.github/workflows/build.yml`) se dispara en tag push `v*` y publica ejecutables de Linux/Windows/macOS con `softprops/action-gh-release`. **CI v3.3.1: `success`, release publicada** con `yt-dowloader-linux.{deb,tar.gz}`, `yt-dowloader-macos.{dmg,zip}`, `yt-dowloader-windows-portable.zip` y `YT-DownLoader-Jaeger-Setup.exe`.
 - **Tests: 133 unitarios verdes** (`core_tests/test_core.py`; 127 previos + 6 nuevos de anti-hang y cancel en postproceso) + **16 live verdes** (8 plataformas × verificación + detección). `py_compile` OK y smoke UI (`/tmp/opencode/smoke_bugs.py`) → `SMOKE OK`.
-- **Bug-fix 2026-09-15 — IMPLEMENTADO y VERIFICADO, SIN release todavía** (pendiente bump `__version__` → v3.3.1 + commit/tag/push):
+- **INCLUIDO EN v3.3.1 (2026-09-15):**
   - **(1) Anti-hang** — `socket_timeout=TIMEOUT_RED` (20s) en verificación y descarga + `_opciones_base` fuerza `noplaylist=True` (la verificación ya NO crawlea una playlist completa; antes podía colgarse para siempre).
   - **(2) Cancel también aborta en postproceso** — `postprocessor_hook` chequea `cancel_flag` (antes la conversión ignoraba la cancelación y el botón quedaba atascado en "Descargando"). `_limpiar_cola` ahora aborta fuerte (`_cancelar_item_fuerte` = flag + `ydl._download_retcode`) + `stop_all` y resetea botones al instante. Guard anti-carrera `_cola_run_id`: el `finally` de un worker viejo no pisa los botones de una corrida nueva.
   - **(3) `VentanaDiagnostico` se abre encima** — `transient(master)` + `_encima()` diferido 120 ms (`deiconify`+`lift`+`focus_force`+`-topmost` 300 ms). Llamar `lift()` en `__init__` antes de que la ventana esté mapeada falla en silencio → se abría detrás de la ventana principal.
 - **Fases 0–3 completadas** (seguridad → validación/privacy → UX/limpieza). Nada pendiente de implementar excepto los "open items" de seguridad (sección 6).
-- `__version__ = "3.3.0"` en **`yt-dowloader.py:2`**. `GITHUB_REPO = "RafaelReyes0816/yt-dowloader-"` en `core.py:10` (debe coincidir con el remoto o el auto-update del GITHUB_REPO no funciona).
+- `__version__ = "3.3.1"` en **`yt-dowloader.py:2`**. `GITHUB_REPO = "RafaelReyes0816/yt-dowloader-"` en `core.py:10` (debe coincidir con el remoto o el auto-update del GITHUB_REPO no funciona).
 
 ## 2. Arquitectura (mapa mental rápido)
 
@@ -91,5 +91,5 @@ Para **cualquier cambio futuro**, seguir este loop (no perderlo; es lo que manti
 1. **SEC-03** (regex de plataforma anclada al host) con tests (red→green→refactor, pasos de la sección 4).
 2. **SEC-04** (`chmod 0600` + validar `saved` dict) con test de redondeo de prefs.
 3. Si aplica: smoke test GUI de nuevo tras esos cambios (`/tmp/opencode/smoke_ui.py`).
-4. **Release v3.3.1 (LISTA PARA LANZAR)** — los 3 bug-fixes están implementados y verificados (ver sección 1), pero `__version__` sigue en `"3.3.0"`. Pasos: bump `__version__` → `"3.3.1"` en `yt-dowloader.py:2`, commit mensaje `fix v3.3.1: antihang (socket_timeout/noplaylist), cancel en postproceso + boton atascado, diagnostico encima`, y **tag v3.3.1 + push EXPLÍCITO del tag** (`git push origin v3.3.1`; recordar lección de `--follow-tags`).
+4. **v3.3.1 YA LANZADA** (2026-09-15, CI success, assets publicados) — ver sección 1. Próxima release tras SEC-03/SEC-04: bump a v3.3.2/v3.4.0 y **tag + push EXPLÍCITO del tag** (`git push origin vX.Y.Z`; recordar lección de `--follow-tags`).
 5. **NO cerrar la sesión sin actualizar `MEMORY.md`** con el estado final (versión, commit/tag, CI, tests) — la regla obligatoria del inicio de este archivo.
