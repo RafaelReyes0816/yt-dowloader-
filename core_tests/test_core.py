@@ -10,6 +10,7 @@ from core import (
     ClasificadorErrores,
     comparar_versiones,
     _construir_opciones_descarga,
+    _opciones_base,
     DescargaCancelada,
     PLATAFORMAS_CONFIG,
     RESOLUCIONES_YOUTUBE,
@@ -173,6 +174,13 @@ class TestConstruirOpciones:
         )
         assert opts["noplaylist"] is False
 
+    def test_descarga_incluye_socket_timeout_finito(self):
+        opts = _construir_opciones_descarga(
+            "https://youtube.com/watch?v=x", "/tmp/out", "audio", "128", False, False
+        )
+        assert isinstance(opts.get("socket_timeout"), (int, float))
+        assert 0 < opts["socket_timeout"] <= 60
+
 
 class TestCancelacion:
     def test_hook_lanza_descarga_cancelada_cuando_flag_activo(self):
@@ -197,6 +205,47 @@ class TestCancelacion:
         hook({"status": "downloading", "total_bytes": 100, "downloaded_bytes": 50})
         hook({"status": "finished"})
         assert prog == [0.5, 1.0]
+
+
+class TestOpcionesBaseAntiHang:
+    def test_incluye_socket_timeout_finito(self):
+        opts = _opciones_base()
+        assert isinstance(opts.get("socket_timeout"), (int, float))
+        assert 0 < opts["socket_timeout"] <= 60
+
+    def test_socket_timeout_con_flag_y_navegador(self):
+        opts = _opciones_base(navegador="firefox", cancel_flag=threading.Event())
+        assert 0 < opts["socket_timeout"] <= 60
+
+    def test_verificacion_no_recorre_playlist_completa(self):
+        opts = _opciones_base()
+        assert opts.get("noplaylist") is True
+
+
+class TestCancelacionPostproceso:
+    def test_postprocessor_hook_aborta_cuando_flag_activo(self):
+        flag = threading.Event()
+        flag.set()
+        llamadas = []
+        opts = _construir_opciones_descarga(
+            "https://youtube.com/watch?v=x", "/tmp/o", "audio", "128", False, False,
+            cancel_flag=flag, postprocessor_callback=lambda e, n: llamadas.append((e, n)),
+        )
+        hook = opts["postprocessor_hooks"][0]
+        with pytest.raises(DescargaCancelada):
+            hook({"status": "started", "postprocessor": "ExtractAudio"})
+        assert llamadas == []
+
+    def test_postprocessor_hook_continua_cuando_flag_inactivo(self):
+        flag = threading.Event()
+        llamadas = []
+        opts = _construir_opciones_descarga(
+            "https://youtube.com/watch?v=x", "/tmp/o", "audio", "128", False, False,
+            cancel_flag=flag, postprocessor_callback=lambda e, n: llamadas.append((e, n)),
+        )
+        hook = opts["postprocessor_hooks"][0]
+        hook({"status": "finished", "postprocessor": "ExtractAudio"})
+        assert ("finished", "ExtractAudio") in llamadas
 
 
 class TestPlataformasConfig:

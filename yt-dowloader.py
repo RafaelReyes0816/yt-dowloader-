@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-__version__ = "3.3.0"
+__version__ = "3.3.1"
 
 import os
 import subprocess
@@ -553,9 +553,28 @@ class VentanaDiagnostico(ctk.CTkToplevel):
         self.navegador = navegador
         self.checks = {}
         self._build_ui()
-        self.lift()
-        self.focus_force()
+        self.transient(self.master)
+        self.after(120, self._encima)
         self.after(100, lambda: threading.Thread(target=self._run_checks, daemon=True).start())
+
+    def _encima(self):
+        try:
+            if not self.winfo_exists():
+                return
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+            self.attributes("-topmost", True)
+            self._guard_after(300, self._quitar_topmost)
+        except Exception:
+            pass
+
+    def _quitar_topmost(self):
+        try:
+            if self.winfo_exists():
+                self.attributes("-topmost", False)
+        except Exception:
+            pass
 
     def _guard_after(self, ms, fn):
         try:
@@ -766,6 +785,7 @@ class App(ctk.CTk):
         self._hist_lock = threading.Lock()
         self.is_downloading = False
         self.stop_all = threading.Event()
+        self._cola_run_id = 0
         self.clipboard_auto = self.prefs.get("clipboard_auto", True)
         self._ocultar_urls = bool(self.prefs.get("ocultar_urls", True))
         self._url_valida = False
@@ -1471,9 +1491,11 @@ class App(ctk.CTk):
         self.is_downloading = True
         self.btn_iniciar.configure(state="disabled", text="Descargando...")
         self.btn_detener.configure(state="normal")
-        threading.Thread(target=self._procesar_cola, args=(pending, nav_sesion), daemon=True).start()
+        self._cola_run_id += 1
+        run_id = self._cola_run_id
+        threading.Thread(target=self._procesar_cola, args=(pending, nav_sesion, run_id), daemon=True).start()
 
-    def _procesar_cola(self, pending, navegador_actual):
+    def _procesar_cola(self, pending, navegador_actual, run_id=None):
         total = len(pending)
         max_paralelas = int(self.prefs.get("max_paralelas", 1) or 1)
         max_paralelas = max(1, min(max_paralelas, 3))
@@ -1507,8 +1529,9 @@ class App(ctk.CTk):
         finally:
             self.is_downloading = False
             self.stop_all.clear()
-            self.after(0, lambda: self.btn_iniciar.configure(state="normal", text="Iniciar descargas"))
-            self.after(0, lambda: self.btn_detener.configure(state="disabled"))
+            if run_id is None or run_id == self._cola_run_id:
+                self.after(0, lambda: self.btn_iniciar.configure(state="normal", text="Iniciar descargas"))
+                self.after(0, lambda: self.btn_detener.configure(state="disabled"))
             self.after(0, self._actualizar_consola)
 
     def _marcar_fallo_interno(self, item, detalle):
@@ -1667,7 +1690,9 @@ class App(ctk.CTk):
         self.is_downloading = True
         self.btn_iniciar.configure(state="disabled", text="Descargando...")
         self.btn_detener.configure(state="normal")
-        threading.Thread(target=self._procesar_cola, args=([item], nav_sesion), daemon=True).start()
+        self._cola_run_id += 1
+        run_id = self._cola_run_id
+        threading.Thread(target=self._procesar_cola, args=([item], nav_sesion, run_id), daemon=True).start()
 
     # ---------- Quitar item ----------
     def _quitar_item(self, item):
@@ -1692,10 +1717,15 @@ class App(ctk.CTk):
         if not messagebox.askyesno("Limpiar cola",
                                    "¿Vaciar toda la cola? Las descargas activas se detendrán."):
             return
+        self._cola_run_id += 1
+        self.is_downloading = False
+        self.stop_all.set()
         for item in self.queue_items[:]:
-            item["cancel_flag"].set()
+            self._cancelar_item_fuerte(item)
             self.after(0, lambda i=item: i["card"].destroy())
         self.queue_items.clear()
+        self.after(0, lambda: self.btn_iniciar.configure(state="normal", text="Iniciar descargas"))
+        self.after(0, lambda: self.btn_detener.configure(state="disabled"))
         self._toggle_empty_state()
         self._actualizar_consola()
         self._log("Cola limpiada.")

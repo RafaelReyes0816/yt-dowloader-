@@ -113,6 +113,8 @@ TIPOS_BLOQUEANTES = {
     "unavailable", "not_found", "cookies", "bot",
 }
 
+TIMEOUT_RED = 20
+
 TIPOS_REINTENTO_SESION = {"private", "members_only", "age_restricted", "sign_in", "cookies", "bot"}
 
 ORDEN_NAVEGADORES = ["firefox", "chrome", "brave", "edge"]
@@ -423,7 +425,13 @@ def guardar_preferencias(prefs):
 
 
 def _opciones_base(navegador=None, cancel_flag=None):
-    opciones = {"quiet": True, "no_warnings": True, "skip_download": True}
+    opciones = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "noplaylist": True,
+        "socket_timeout": TIMEOUT_RED,
+    }
     if cancel_flag is not None:
         def hook(d):
             if cancel_flag.is_set():
@@ -501,6 +509,8 @@ def _construir_opciones_descarga(url, carpeta, modo, calidad, subtitulos, playli
             progreso_callback(1.0)
 
     def postprocessor_hook(d):
+        if cancel_flag is not None and cancel_flag.is_set():
+            raise DescargaCancelada()
         if postprocessor_callback:
             estado = d.get("status")
             if estado in ("started", "finished"):
@@ -517,6 +527,7 @@ def _construir_opciones_descarga(url, carpeta, modo, calidad, subtitulos, playli
         "outtmpl": outtmpl,
         "noplaylist": not playlist,
         "progress_hooks": [progress_hook],
+        "socket_timeout": TIMEOUT_RED,
     }
     if postprocessor_callback:
         opciones["postprocessor_hooks"] = [postprocessor_hook]
