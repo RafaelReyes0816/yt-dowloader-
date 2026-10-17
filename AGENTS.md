@@ -10,10 +10,14 @@ Python desktop app (CustomTkinter UI in `yt-dowloader.py` + pure business logic 
 
 ## Run
 
+The repo path contains **spaces** (`.../Proyectos web/yt-dowloader-`) — always quote paths in shell commands.
+
 ```bash
 pip install -r requirements.txt   # or: pip install -r requirements-dev.txt (includes pytest)
 python yt-dowloader.py
 ```
+
+A `.venv/` with dev deps (pytest, customtkinter 6, yt-dlp) already exists — prefer `.venv/bin/python ...` as in the commands below.
 
 System dependency: `ffmpeg` must be installed and on PATH (required by yt-dlp for mp3 conversion and mp4 muxing). On Debian/Ubuntu: `sudo apt install python3-tk` if tkinter is missing.
 
@@ -21,6 +25,9 @@ System dependency: `ffmpeg` must be installed and on PATH (required by yt-dlp fo
 
 ```bash
 .venv/bin/python -m pytest        # 188 offline tests (pytest.ini defaults to -m "not live")
+
+# Single test / single class:
+.venv/bin/python -m pytest core_tests/test_core.py::TestDescargaLimpiaTmpdir::test_tmpdir_se_elimina_tras_exito -q
 ```
 
 - Offline unit tests: `core_tests/test_core.py` (platform detection, regex, classifier, options, cancel hook, prefs, anti-hang).
@@ -28,6 +35,8 @@ System dependency: `ffmpeg` must be installed and on PATH (required by yt-dlp fo
 - Dev deps in `requirements-dev.txt`. CI runs `pytest` on the Linux build before `pyinstaller`; a failure blocks the release.
 
 ## Pre-release check (OBLIGATORIO antes de taggear una release)
+
+Release flow: bump `__version__` (line 2 of `yt-dowloader.py`) → run this check → commit → tag → push **the tag itself** (`git push origin vX.Y.Z`, not just the branch).
 
 Antes de crear **cualquier** tag `v*` (que dispara el CI y publica la release), ejecutar SIEMPRE el chequeo E2E real y exigir `RESULTADO: OK`:
 
@@ -85,6 +94,8 @@ git push origin v1.0.0
 
 - Filename typo `dowloader` (missing 'n') is intentional — matches the PyInstaller spec output name. Do not rename without updating the spec.
 - UI is entirely in Spanish.
+- Commit style: `feat vX.Y.Z: ...` / `fix vX.Y.Z: ...` (message in Spanish). Current version lives in `__version__` at `yt-dowloader.py:2`.
+- `MEMORY.md` is the session checkpoint (versions, CI status, open items); its own rule says to update it on the final commit of a release batch before closing the session.
 - `GITHUB_REPO` constant in `core.py` must match the actual GitHub repo path for auto-update to work.
 - `bfg-*.jar` files in repo are BFG Repo-Cleaner (used to purge secrets from git history). Not part of the app. Ignored by `.gitignore` for new files.
 - Open security items (2026-09-14 audit): **SEC-03** — anchor `PLATFORM_REGEX`/`extraer_url_completa` to the real host (current substring matching accepts `youtube.com.evil.example`). **SEC-04** — `os.chmod(CONFIG_FILE, 0o600)` on save and validate `saved` is a dict on load. SEC-05 (`cookiesfrombrowser`) needs no change — credentials are never stored.
