@@ -15,16 +15,16 @@
 
 ## 1. Checkpoint — dónde estamos
 
-- **Última release: v3.3.1** (commit `2cb32a8`, tag `v3.3.1` pusheado a `master` de GitHub, repo `RafaelReyes0816/yt-dowloader-`). El CI de GitHub Actions (`.github/workflows/build.yml`) se dispara en tag push `v*` y publica ejecutables de Linux/Windows/macOS con `softprops/action-gh-release`. **CI v3.3.1: `success`, release publicada** con `yt-dowloader-linux.{deb,tar.gz}`, `yt-dowloader-macos.{dmg,zip}`, `yt-dowloader-windows-portable.zip` y `YT-DownLoader-Jaeger-Setup.exe`.
+- **Última release: v3.4.0** (commit `ddcbf42`, tag `v3.4.0` pusheado a `master`, repo `RafaelReyes0816/yt-dowloader-`). **CI v3.4.0: `success`**, release publicada con `yt-dowloader-linux.{deb,tar.gz}`, `yt-dowloader-macos.{dmg,zip}`, `yt-dowloader-windows-portable.zip` y `YT-DownLoader-Jaeger-Setup.exe`. Anterior: v3.3.1 (commit `2cb32a8`).
 - **Tests: 175 unitarios verdes** (`core_tests/test_core.py`; 133 previos + 42 nuevos de idiomas, outtmpl/tmpdir, idiomas desde `info` y limpieza de restos) + **16 live** (8 plataformas × verificación + detección). `py_compile` OK y smoke UI 2026-09-15/17 (`/tmp/opencode/ui_smoke.py`, requiere `xvfb-run`) → `SMOKE OK`.
-- **PENDIENTE DE RELEASE (v3.4.0, sin commitear todavía): idiomas + subtítulos incrustados + limpieza de restos.**
+- **INCLUIDO EN v3.4.0 (2026-10-17): idiomas + subtítulos incrustados + limpieza de restos + nombres únicos.**
   - **(1) Idioma de audio y de subtítulos** — dropdowns "Idioma audio" e "Idioma subtítulos" (`IDIOMAS_AUDIO = IDIOMAS_SUBTITULOS = [auto, es, en, …]`, nombres en `IDIOMAS_NOMBRES`) + pill "Capturas auto" (`subtitulos_auto`). Prefs nuevas: `idioma_audio`/`idioma_subtitulos` (códigos, default `auto`) y `subtitulos_auto` (default `True`). Audio no-YouTube filtra por `[language=xx]` con respaldo `/best` (`aplicar_idioma_a_selector`); video elige pista de audio igual y subtítulos con `subtitleslangs=p["_patrones_subtitulos"]` (`writeautomaticsub` singular). En modo audio los 3 controles de subtítulos quedan desactivados (`PillToggle.set_pill_disabled` + `App._actualizar_controles_subtitulos`, llamado desde `_actualizar_calidades`).
   - **(2) Subtítulos incrustados** — en video + plataforma con `soporta_subtitulos`: `FFmpegEmbedSubtitle` (`already_have_subtitle=False`) como último PP; yt-dlp borra el `.vtt` suelto (y `_delete_downloaded_files` lo quita de `__files_to_move`, así que no hay warning de archivo faltante).
   - **(3) Sin restos** — `outtmpl` pasó a **dict** (`default`=carpeta, `temp`/`subtitle`=`.tmp-<rand>`) creado con `tempfile.mkdtemp` dentro de la carpeta destino; `descargar_musica` lo borra en `finally`. Botón "Limpiar restos" en el header de la cola: guarda si hay descargas activas, `listar_restos(carpeta)` → `{"temporales", "subtitulos"}` → confirmación (`askyesnocancel` cuando hay ambos) → `limpiar_restos(carpeta, incluir_subtitulos=...)`. `.tmp-*`, `*.part(-FragN)`, `*.ytdl`, `*.temp.<ext>`, `*.orig.<ext>`, `*.keyframes.temp` se borran siempre; **media final y subtítulos sueltos solo con opt-in**.
   - **(4) Colisiones** — **todas** las plataformas usan `%(title)s [%(id)s].%(ext)s` (antes solo YouTube), evitando que `existing_file` salte una descarga de otro video con el mismo título.
   - **(5) Diagnóstico** — `VentanaDiagnostico` ahora muestra título + `listar_idiomas_audio`/`listar_idiomas_subtitulos` del `info` ya obtenido por `verificar_url` + la preferencia actual (tolerante a playlists).
 - **Fases 0–3 completadas** (seguridad → validación/privacy → UX/limpieza). Nada pendiente de implementar excepto los "open items" de seguridad (sección 6).
-- `__version__ = "3.4.0"` en **`yt-dowloader.py:2`** (release pendiente). `GITHUB_REPO = "RafaelReyes0816/yt-dowloader-"` en `core.py:10` (debe coincidir con el remoto o el auto-update del GITHUB_REPO no funciona).
+- `__version__ = "3.4.0"` en **`yt-dowloader.py:2`**. `GITHUB_REPO = "RafaelReyes0816/yt-dowloader-"` en `core.py:10` (debe coincidir con el remoto o el auto-update del GITHUB_REPO no funciona).
 
 ## 2. Arquitectura (mapa mental rápido)
 
@@ -94,5 +94,5 @@ Para **cualquier cambio futuro**, seguir este loop (no perderlo; es lo que manti
 1. **SEC-03** (regex de plataforma anclada al host) con tests (red→green→refactor, pasos de la sección 4).
 2. **SEC-04** (`chmod 0600` + validar `saved` dict) con test de redondeo de prefs.
 3. Si aplica: smoke test GUI de nuevo tras esos cambios (`/tmp/opencode/smoke_ui.py`).
-4. **v3.3.1 YA LANZADA** (2026-09-15, CI success, assets publicados) — ver sección 1. **v3.4.0 (idiomas + subtítulos incrustados + limpieza de restos) está implementada y verde (175 tests) pero SIN commitear**: falta commit + tag + push EXPLÍCITO del tag (`git push origin vX.Y.Z`; recordar lección de `--follow-tags`).
+4. **v3.4.0 YA LANZADA** (2026-10-17, commit `ddcbf42`, CI success, assets publicados) — ver sección 1. Próxima release tras SEC-03/SEC-04: bump a v3.4.1/v3.5.0 y **tag + push EXPLÍCITO del tag** (`git push origin vX.Y.Z`; recordar lección de `--follow-tags`).
 5. **NO cerrar la sesión sin actualizar `MEMORY.md`** con el estado final (versión, commit/tag, CI, tests) — la regla obligatoria del inicio de este archivo.
