@@ -154,19 +154,19 @@ PLATAFORMA_DOMINIOS = {
 }
 
 RESOLUCIONES_YOUTUBE = {
-    "360p": "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/mp4",
-    "480p": "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/mp4",
-    "720p": "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/mp4",
-    "1080p": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/mp4",
+    "360p": "bestvideo[height<=360][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/mp4",
+    "480p": "bestvideo[height<=480][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/mp4",
+    "720p": "bestvideo[height<=720][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/mp4",
+    "1080p": "bestvideo[height<=1080][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/mp4",
     "1440p": "bestvideo[height<=1440]+bestaudio/best[height<=1440]",
     "2160p": "bestvideo[height<=2160]+bestaudio/best[height<=2160]",
 }
 
 RESOLUCIONES_GENERICAS = {
-    "360p": "bestvideo[height<=360]+bestaudio/best[height<=360]/best",
-    "480p": "bestvideo[height<=480]+bestaudio/best[height<=480]/best",
-    "720p": "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
-    "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+    "360p": "bestvideo[height<=360][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=360]+bestaudio/best[height<=360]/best",
+    "480p": "bestvideo[height<=480][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=480]+bestaudio/best[height<=480]/best",
+    "720p": "bestvideo[height<=720][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+    "1080p": "bestvideo[height<=1080][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
     "1440p": "bestvideo[height<=1440]+bestaudio/best[height<=1440]/best",
     "2160p": "bestvideo[height<=2160]+bestaudio/best[height<=2160]/best",
 }
