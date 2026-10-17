@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-__version__ = "3.4.0"
+__version__ = "3.4.1"
 
 import os
 import subprocess

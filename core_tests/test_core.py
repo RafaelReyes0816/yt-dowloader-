@@ -378,6 +378,34 @@ class TestResolucionesYoutube4K:
         assert "ext=mp4" not in opts["format"]
 
 
+class TestCompatibilidadCodecVlc:
+    """El video debe salir en H.264 (avc1): VLC no puede abrir AV1/VP9 en mp4."""
+
+    @pytest.mark.parametrize("res", ["360p", "480p", "720p", "1080p"])
+    def test_youtube_prefiere_h264(self, res):
+        fmt = RESOLUCIONES_YOUTUBE[res]
+        assert "[vcodec^=avc1]" in fmt
+        assert "[ext=mp4]" in fmt
+
+    @pytest.mark.parametrize("res", ["360p", "480p", "720p", "1080p"])
+    def test_youtube_conserva_respaldo(self, res):
+        limite = res.replace("p", "")
+        fmt = RESOLUCIONES_YOUTUBE[res]
+        assert (
+            f"bestvideo[height<={limite}][ext=mp4]+bestaudio[ext=m4a]/mp4" in fmt
+        )
+
+    @pytest.mark.parametrize("res", ["360p", "480p", "720p", "1080p"])
+    def test_generica_prefiere_h264(self, res):
+        assert "[vcodec^=avc1]" in RESOLUCIONES_GENERICAS[res]
+
+    def test_descarga_1080p_pide_h264(self):
+        opts = _construir_opciones_descarga(
+            "https://youtube.com/watch?v=x", "/tmp/o", "video", "1080p", False, False
+        )
+        assert "[vcodec^=avc1]" in opts["format"]
+
+
 class TestPostprocessorCallback:
     def test_opciones_incluyen_postprocessor_hooks(self):
         llamadas = []
@@ -721,7 +749,7 @@ class TestAplicarIdiomaSelector:
 
     def test_generico_con_idioma(self):
         salida = aplicar_idioma_a_selector(RESOLUCIONES_GENERICAS["1080p"], "en")
-        assert "bestaudio[language=en]" in salida
+        assert "bestaudio[ext=m4a][language=en]" in salida
 
     def test_no_duplica_si_ya_tiene_idioma(self):
         selector = "bestaudio[language=es]/best"
