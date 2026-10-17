@@ -764,13 +764,39 @@ class TestAplicarIdiomaSelector:
 
 
 class TestPatronIdioma:
-    def test_coincide_con_variantes_de_region(self):
+    def test_coincide_con_codigo_base_y_variantes_largas(self):
+        # yt-dlp aplica los patrones con re.I + fullmatch, así que los sufijos de
+        # 2 letras ("en-US" región vs "en-de" traducción) son indistinguibles:
+        # se conservan sufijos de 3+ letras (script/orig) y numéricos (ej. "es-419").
         assert re.fullmatch(_patron_idioma("en"), "en", re.I)
-        assert re.fullmatch(_patron_idioma("en"), "en-US", re.I)
-        assert re.fullmatch(_patron_idioma("en"), "en-orig", re.I)
         assert re.fullmatch(_patron_idioma("en"), "EN", re.I)
+        assert re.fullmatch(_patron_idioma("en"), "en-orig", re.I)
+        assert re.fullmatch(_patron_idioma("zh"), "zh-Hans", re.I)
+        assert re.fullmatch(_patron_idioma("es"), "es-419", re.I)
+        assert not re.fullmatch(_patron_idioma("en"), "en-US")
         assert not re.fullmatch(_patron_idioma("en"), "eng")
         assert not re.fullmatch(_patron_idioma("en"), "fr")
+
+    def test_no_coincide_con_variantes_de_traduccion(self):
+        # Regresión: `en(-.*)?` capturaba todas las traducciones automáticas
+        # (`en-de`, `en-en`, ...) → ráfaga de peticiones → HTTP 429 → descarga abortada.
+        for variacion in ("en-de", "en-en", "en-fr", "en-ja", "de-en", "es-en"):
+            assert not re.fullmatch(_patron_idioma("en"), variacion, re.I), variacion
+            assert not re.fullmatch(_patron_idioma("es"), variacion, re.I), variacion
+
+    def test_no_descarga_traducciones_seleccionadas_por_ytdlp(self):
+        # Misma selección que hace yt-dlp (orderedSet_from_options, re.I + fullmatch)
+        # con un set realista: subs manuales en en+de generan traducciones xx-yy.
+        todos = (
+            "en", "en-orig", "en-de", "en-en", "en-fr",
+            "de", "de-en", "de-de", "es", "es-419", "pt", "pt-BR",
+        )
+        resultado = orderedSet_from_options(
+            _patrones_subtitulos("auto"), {"all": todos}, use_regex=True)
+        assert resultado == ["es", "es-419", "en", "en-orig", "pt"]
+        assert "en-de" not in resultado
+        assert "en-en" not in resultado
+        assert "de-en" not in resultado
 
     def test_patrones_de_auto_no_vacios(self):
         patrones = _patrones_subtitulos("auto")
@@ -780,16 +806,18 @@ class TestPatronIdioma:
         todos = ("es", "en", "en-US", "en-orig", "pt", "pt-BR", "fr", "de")
         resultado = orderedSet_from_options(
             _patrones_subtitulos("auto"), {"all": todos}, use_regex=True)
-        assert resultado == ["es", "en", "en-US", "en-orig", "pt", "pt-BR"]
+        # "en-US"/"pt-BR" (2 letras) se excluyen a propósito: con re.I son
+        # indistinguibles de traducciones ("en-de") que disparaban HTTP 429.
+        assert resultado == ["es", "en", "en-orig", "pt"]
 
     def test_patron_de_idioma_especifico_contra_ytdlp(self):
-        todos = ("en", "en-US", "es", "pt-BR")
+        todos = ("en", "en-US", "es", "pt-BR", "en-orig")
         assert orderedSet_from_options(
             _patrones_subtitulos("es"), {"all": todos}, use_regex=True) == ["es"]
         assert orderedSet_from_options(
-            _patrones_subtitulos("en"), {"all": todos}, use_regex=True) == ["en", "en-US"]
+            _patrones_subtitulos("en"), {"all": todos}, use_regex=True) == ["en", "en-orig"]
         assert orderedSet_from_options(
-            _patrones_subtitulos("pt"), {"all": todos}, use_regex=True) == ["pt-BR"]
+            _patrones_subtitulos("pt"), {"all": todos}, use_regex=True) == []
 
     def test_sin_idioma_usa_fallback(self):
         assert _patrones_subtitulos("") == [_patron_idioma(c) for c in SUBTITULOS_AUTO_FALLBACK]

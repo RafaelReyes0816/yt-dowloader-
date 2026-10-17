@@ -235,8 +235,15 @@ _PREFIJO_TMPDIR = ".tmp-"
 
 
 def _patron_idioma(codigo):
-    """Patron yt-dlp para un codigo de idioma y sus variantes de region (fullmatch)."""
-    return rf"{re.escape(codigo)}(-.*)?"
+    """Patron yt-dlp para un codigo de idioma (fullmatch; yt-dlp lo aplica con re.I).
+
+    Coincide con el codigo base y con variantes de sufijo largo/numerico
+    (es-419, zh-Hans, en-orig). NO coincide con sufijos de 2 letras: bajo re.I
+    "en-US" (region) y "en-de" (traduccion automatica) serian indistinguibles,
+    y capturar todas las traducciones provoca rafagas de peticiones que
+    YouTube responde con HTTP 429, abortando la descarga completa.
+    """
+    return rf"{re.escape(codigo)}(?:-(?:[A-Za-z]{{3,}}|[0-9]{{2,4}}))?"
 
 
 def _patrones_subtitulos(idioma):
