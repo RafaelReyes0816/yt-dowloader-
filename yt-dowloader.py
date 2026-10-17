@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-__version__ = "3.3.1"
+__version__ = "3.4.0"
 
 import os
 import subprocess
@@ -35,6 +35,14 @@ from core import (
     sanear_texto_clipboard,
     CALIDADES_AUDIO,
     CALIDADES_VIDEO,
+    IDIOMA_AUTO,
+    IDIOMAS_AUDIO,
+    IDIOMAS_SUBTITULOS,
+    IDIOMAS_NOMBRES,
+    listar_idiomas_audio,
+    listar_idiomas_subtitulos,
+    listar_restos,
+    limpiar_restos,
 )
 
 from theme import (
@@ -239,16 +247,27 @@ class PillToggle(ctk.CTkButton):
                          corner_radius=RADII["pill"], command=self._toggle, **kwargs)
         self.variable = variable
         self.external_command = command
+        self._pill_disabled = False
         self._update_style()
         self.variable.trace_add("write", lambda *_: self._update_style())
 
+    def set_pill_disabled(self, estado):
+        self._pill_disabled = bool(estado)
+        self.configure(state="disabled" if self._pill_disabled else "normal")
+        self._update_style()
+
     def _toggle(self):
+        if self._pill_disabled:
+            return
         self.variable.set(not self.variable.get())
         if self.external_command:
             self.external_command()
 
     def _update_style(self):
-        if self.variable.get():
+        if self._pill_disabled:
+            self.configure(fg_color=COLORS["bg.base"], text_color=COLORS["text.secondary"],
+                           hover_color=COLORS["bg.base"])
+        elif self.variable.get():
             self.configure(fg_color=COLORS["accent.brand"], text_color=COLORS["text.primary"],
                            hover_color=COLORS["accent.brand-hover"])
         else:
@@ -719,8 +738,39 @@ class VentanaDiagnostico(ctk.CTkToplevel):
             self._guard_after(0, lambda t=texto: self.detail_label.configure(text=t))
         elif resultado.get("info"):
             self._set("acceso", "OK · acceso público", COLORS["accent.success"])
+            texto = self._texto_idiomas(resultado["info"])
+            if texto:
+                self._guard_after(0, lambda t=texto: self.detail_label.configure(text=t))
         else:
             self._set("acceso", "Sin datos", COLORS["text.secondary"])
+
+    def _texto_idiomas(self, info):
+        if not isinstance(info, dict):
+            return ""
+        lineas = []
+        titulo = info.get("title")
+        if titulo:
+            lineas.append("Título: " + str(titulo))
+        audio = listar_idiomas_audio(info)
+        subtitulos = listar_idiomas_subtitulos(info)
+        lineas.append("Idiomas de audio: " + self._resumen_idiomas(audio))
+        lineas.append("Subtítulos disponibles: " + self._resumen_idiomas(subtitulos))
+        prefs = getattr(self.master, "prefs", None)
+        if isinstance(prefs, dict):
+            elegido_audio = IDIOMAS_NOMBRES.get(prefs.get("idioma_audio", IDIOMA_AUTO), IDIOMA_AUTO)
+            elegido_sub = IDIOMAS_NOMBRES.get(prefs.get("idioma_subtitulos", IDIOMA_AUTO), IDIOMA_AUTO)
+            lineas.append(f"Preferencia actual: audio={elegido_audio} · subtítulos={elegido_sub}")
+        return "\n".join(lineas)
+
+    @staticmethod
+    def _resumen_idiomas(codigos):
+        if not codigos:
+            return "no informados"
+        visibles = codigos[:12]
+        resumen = ", ".join(visibles)
+        if len(codigos) > len(visibles):
+            resumen += f" (+{len(codigos) - len(visibles)} más)"
+        return resumen
 
     def _actualizar_motor(self):
         if getattr(sys, "frozen", False):
@@ -982,9 +1032,10 @@ class App(ctk.CTk):
         row_toggles.grid(row=1, column=0, sticky="ew", padx=15, pady=(0, 12))
 
         self.subtitulos_var = ctk.BooleanVar(value=self.prefs.get("subtitulos", False))
-        PillToggle(row_toggles, "Subtítulos", self.subtitulos_var,
-                   fg_color=COLORS["bg.surface"], text_color=COLORS["text.secondary"],
-                   hover_color=COLORS["bg.surface-hover"]).pack(side="left", padx=(0, 6))
+        self.subtitulos_pill = PillToggle(row_toggles, "Subtítulos", self.subtitulos_var,
+                                          fg_color=COLORS["bg.surface"], text_color=COLORS["text.secondary"],
+                                          hover_color=COLORS["bg.surface-hover"])
+        self.subtitulos_pill.pack(side="left", padx=(0, 6))
 
         self.playlist_var = ctk.BooleanVar(value=self.prefs.get("playlist", False))
         PillToggle(row_toggles, "Playlist", self.playlist_var,
@@ -1008,8 +1059,33 @@ class App(ctk.CTk):
                                                      ["1", "2", "3"], width=60)
         self.paralelas_option.pack(side="left")
 
+        row_idiomas = ctk.CTkFrame(opt_frame, fg_color="transparent")
+        row_idiomas.grid(row=2, column=0, sticky="ew", padx=15, pady=(0, 12))
+
+        opciones_idioma = [IDIOMAS_NOMBRES[c] for c in IDIOMAS_AUDIO]
+
+        ctk.CTkLabel(row_idiomas, text="Idioma audio:", font=FONTS["small"],
+                     text_color=COLORS["text.secondary"]).pack(side="left", padx=(0, 6))
+        self.idioma_audio_var = ctk.StringVar()
+        self.idioma_audio_option = self._crear_dropdown(row_idiomas, self.idioma_audio_var,
+                                                        opciones_idioma, width=180)
+        self.idioma_audio_option.pack(side="left", padx=(0, 14))
+
+        ctk.CTkLabel(row_idiomas, text="Idioma subtítulos:", font=FONTS["small"],
+                     text_color=COLORS["text.secondary"]).pack(side="left", padx=(0, 6))
+        self.idioma_sub_var = ctk.StringVar()
+        self.idioma_sub_option = self._crear_dropdown(row_idiomas, self.idioma_sub_var,
+                                                      opciones_idioma, width=180)
+        self.idioma_sub_option.pack(side="left", padx=(0, 14))
+
+        self.auto_sub_var = ctk.BooleanVar(value=self.prefs.get("subtitulos_auto", True))
+        self.auto_sub_pill = PillToggle(row_idiomas, "Capturas auto", self.auto_sub_var,
+                                        fg_color=COLORS["bg.surface"], text_color=COLORS["text.secondary"],
+                                        hover_color=COLORS["bg.surface-hover"])
+        self.auto_sub_pill.pack(side="left")
+
         row2 = ctk.CTkFrame(opt_frame, fg_color="transparent")
-        row2.grid(row=2, column=0, sticky="ew", padx=15, pady=(0, 12))
+        row2.grid(row=3, column=0, sticky="ew", padx=15, pady=(0, 12))
         row2.grid_columnconfigure(1, weight=1)
 
         ctk.CTkLabel(row2, text="Guardar en:", font=FONTS["small"],
@@ -1025,7 +1101,7 @@ class App(ctk.CTk):
                       text_color=COLORS["text.secondary"]).grid(row=0, column=2)
 
         row3 = ctk.CTkFrame(opt_frame, fg_color="transparent")
-        row3.grid(row=3, column=0, sticky="ew", padx=15, pady=(0, 12))
+        row3.grid(row=4, column=0, sticky="ew", padx=15, pady=(0, 12))
         row3.grid_columnconfigure(1, weight=1)
 
         self.usar_sesion_var = ctk.BooleanVar(value=self.prefs.get("usar_sesion_navegador", False))
@@ -1047,7 +1123,8 @@ class App(ctk.CTk):
 
         for var in (self.modo_var, self.calidad_var, self.carpeta_var, self.paralelas_var,
                     self.subtitulos_var, self.playlist_var, self.clipboard_var,
-                    self.usar_sesion_var, self.navegador_var, self.ocultar_urls_var):
+                    self.usar_sesion_var, self.navegador_var, self.ocultar_urls_var,
+                    self.idioma_audio_var, self.idioma_sub_var, self.auto_sub_var):
             var.trace_add("write", lambda *_: self._programar_guardado())
 
         self.modo_var.trace_add("write", lambda *_: self._actualizar_calidades())
@@ -1089,7 +1166,15 @@ class App(ctk.CTk):
                                            border_color=COLORS["border.subtle"], border_width=1,
                                            text_color=COLORS["text.secondary"],
                                            command=self._toggle_actividad)
-        self.actividad_btn.grid(row=0, column=2, sticky="e")
+        self.actividad_btn.grid(row=0, column=3, sticky="e")
+
+        self.limpiar_restos_btn = ctk.CTkButton(cola_header, text="Limpiar restos", width=100, height=26,
+                                                font=FONTS["small"],
+                                                fg_color="transparent", hover_color=COLORS["bg.surface-hover"],
+                                                border_color=COLORS["border.subtle"], border_width=1,
+                                                text_color=COLORS["text.secondary"],
+                                                command=self._limpiar_restos_carpeta)
+        self.limpiar_restos_btn.grid(row=0, column=2, sticky="e", padx=(0, 6))
 
         self.cola_scroll = ctk.CTkScrollableFrame(cola_frame, fg_color=COLORS["bg.base"],
                                                   corner_radius=8,
@@ -1156,6 +1241,59 @@ class App(ctk.CTk):
             self.actividad_log.pack(fill="both", expand=True, padx=8, pady=8)
             self.actividad_btn.configure(text="Actividad ▾")
 
+    def _limpiar_restos_carpeta(self):
+        activos = ("descargando", "convirtiendo", "verificando")
+        if any(it.get("estado") in activos for it in self.queue_items):
+            self.annunciador.notify("error", "Hay descargas activas; espera a que terminen")
+            return
+        carpeta = self.carpeta_var.get().strip()
+        if not carpeta or not os.path.isdir(carpeta):
+            self.annunciador.notify("info", "La carpeta de destino no existe")
+            return
+
+        restos = listar_restos(carpeta)
+        temporales = restos.get("temporales", [])
+        subtitulos = restos.get("subtitulos", [])
+        if not temporales and not subtitulos:
+            self.annunciador.notify("ok", "Sin restos que limpiar")
+            self._log("Limpieza de restos: nada que borrar")
+            return
+
+        incluir_subtitulos = False
+        if temporales and subtitulos:
+            respuesta = messagebox.askyesnocancel(
+                "Limpiar restos",
+                f"Se encontraron {len(temporales)} archivo(s) temporal(es) y "
+                f"{len(subtitulos)} subtítulo(s) suelto(s) en la carpeta de destino.\n\n"
+                "Sí: eliminar todo\nNo: eliminar solo temporales\nCancelar: no eliminar nada",
+            )
+            if respuesta is None:
+                return
+            incluir_subtitulos = bool(respuesta)
+        elif temporales:
+            if not messagebox.askyesno(
+                "Limpiar restos",
+                f"Se encontraron {len(temporales)} archivo(s) temporal(es) de descargas "
+                "interrumpidas en la carpeta de destino.\n\n¿Eliminarlos?",
+            ):
+                return
+        else:
+            if not messagebox.askyesno(
+                "Limpiar restos",
+                f"Se encontraron {len(subtitulos)} subtítulo(s) suelto(s) junto a archivos "
+                "ya descargados.\n\n¿Eliminarlos?",
+            ):
+                return
+            incluir_subtitulos = True
+
+        borrados = limpiar_restos(carpeta, incluir_subtitulos=incluir_subtitulos)
+        if borrados:
+            self.annunciador.notify("ok", f"Restos eliminados: {len(borrados)}")
+            self._log(f"Limpieza de restos: {len(borrados)} archivo(s) eliminado(s)")
+        else:
+            self.annunciador.notify("info", "No se pudo eliminar ningún resto")
+            self._log("Limpieza de restos: no se eliminó nada")
+
     def _toggle_empty_state(self):
         if hasattr(self, "empty_state_frame"):
             self.empty_state_frame.destroy()
@@ -1214,8 +1352,24 @@ class App(ctk.CTk):
         self.playlist_var.set(self.prefs.get("playlist", False))
         self.paralelas_var.set(str(self.prefs.get("max_paralelas", 1)))
         self.ocultar_urls_var.set(self._ocultar_urls)
+        self.idioma_audio_var.set(self._nombre_idioma(self.prefs.get("idioma_audio", IDIOMA_AUTO)))
+        self.idioma_sub_var.set(self._nombre_idioma(self.prefs.get("idioma_subtitulos", IDIOMA_AUTO)))
+        self.auto_sub_var.set(bool(self.prefs.get("subtitulos_auto", True)))
         self._actualizar_calidades()
         self._actualizar_estado_navegador()
+
+    @staticmethod
+    def _nombre_idioma(codigo):
+        if not isinstance(codigo, str):
+            codigo = IDIOMA_AUTO
+        return IDIOMAS_NOMBRES.get(codigo, IDIOMAS_NOMBRES[IDIOMA_AUTO])
+
+    @staticmethod
+    def _codigo_idioma(nombre):
+        for codigo, nomb in IDIOMAS_NOMBRES.items():
+            if nomb == nombre:
+                return codigo
+        return IDIOMA_AUTO
 
     def _guardar_prefs_actuales(self):
         self.prefs.update({
@@ -1229,6 +1383,9 @@ class App(ctk.CTk):
             "navegador": self._navegador_seleccionado(),
             "max_paralelas": int(self.paralelas_var.get()) if self.paralelas_var.get().isdigit() else 1,
             "ocultar_urls": self.ocultar_urls_var.get(),
+            "idioma_audio": self._codigo_idioma(self.idioma_audio_var.get()),
+            "idioma_subtitulos": self._codigo_idioma(self.idioma_sub_var.get()),
+            "subtitulos_auto": self.auto_sub_var.get(),
             "historial": self.historial[-100:],
         })
         guardar_preferencias(self.prefs)
@@ -1262,6 +1419,14 @@ class App(ctk.CTk):
             self.calidad_option.configure(values=valores)
             if self.calidad_var.get() not in valores:
                 self.calidad_var.set("720p")
+        self._actualizar_controles_subtitulos()
+
+    def _actualizar_controles_subtitulos(self):
+        es_video = self.modo_var.get().startswith("Video")
+        estado = "normal" if es_video else "disabled"
+        self.idioma_sub_option.configure(state=estado)
+        self.subtitulos_pill.set_pill_disabled(not es_video)
+        self.auto_sub_pill.set_pill_disabled(not es_video)
 
     def _seleccionar_carpeta(self):
         carpeta = filedialog.askdirectory(title="Seleccionar carpeta de destino")
@@ -1417,6 +1582,9 @@ class App(ctk.CTk):
             "subtitulos": subtitulos,
             "playlist": playlist,
             "navegador": navegador,
+            "idioma_audio": self._codigo_idioma(self.idioma_audio_var.get()),
+            "idioma_subtitulos": self._codigo_idioma(self.idioma_sub_var.get()),
+            "subtitulos_auto": self.auto_sub_var.get(),
             "estado": "en_cola",
             "titulo": None,
             "cancel_flag": threading.Event(),
@@ -1620,6 +1788,9 @@ class App(ctk.CTk):
             cancel_flag=item["cancel_flag"],
             ydl_holder=item["ydl_holder"],
             postprocessor_callback=on_postproc,
+            idioma_audio=item.get("idioma_audio", IDIOMA_AUTO),
+            idioma_subtitulos=item.get("idioma_subtitulos", IDIOMA_AUTO),
+            subtitulos_auto=item.get("subtitulos_auto", True),
         )
 
         if exito is False and tipo_fallo == "cancelada":
@@ -1647,6 +1818,9 @@ class App(ctk.CTk):
                     cancel_flag=item["cancel_flag"],
                     ydl_holder=item["ydl_holder"],
                     postprocessor_callback=on_postproc,
+                    idioma_audio=item.get("idioma_audio", IDIOMA_AUTO),
+                    idioma_subtitulos=item.get("idioma_subtitulos", IDIOMA_AUTO),
+                    subtitulos_auto=item.get("subtitulos_auto", True),
                 )
                 if exito is False and tipo_fallo == "cancelada":
                     self._set_estado(item, "cancelado")

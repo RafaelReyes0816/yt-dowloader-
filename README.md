@@ -12,6 +12,9 @@ YouTube, Instagram, Facebook, TikTok, Twitch, Vimeo, Twitter/X y Reddit.
 
 - **Descarga audio** en formato mp3 (calidad seleccionable: 128–320 kbps).
 - **Descarga video** en formato mp4 (resoluciones YouTube: 360p hasta 2160p/4K; otras plataformas: calidad genérica).
+- **Idiomas**: eliges el idioma de la pista de audio (o `Auto` para el original) y el de los subtítulos; los subtítulos se **incrustan** en el video (nunca se dejan archivos `.vtt` sueltos) y en audio no se descargan.
+- **Sin archivos sobrantes**: fragmentos `.part` y temporales de ffmpeg se escriben en una subcarpeta temporal que se elimina automáticamente; el botón "Limpiar restos" ofrece borrar restos de descargas interrumpidas con confirmación.
+- **Nombres únicos**: todos los archivos se guardan como `Título [id].ext`, así dos videos con el mismo título no se pisan.
 - **Cola de descargas** con soporte para múltiples archivos simultáneos, botón de cancelar por item y "Detener todo".
 - **Descarga paralela** opcional (1–3 descargas simultáneas, configurable en preferencias).
 - **Autenticación vía navegador**: si un video requiere sesión (privado, miembros, age-gated), la app puede usar cookies de Firefox/Chrome/Brave/Edge automáticamente sin almacenar credenciales.
