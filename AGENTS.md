@@ -20,12 +20,26 @@ System dependency: `ffmpeg` must be installed and on PATH (required by yt-dlp fo
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest        # 133 offline tests (pytest.ini defaults to -m "not live")
+.venv/bin/python -m pytest        # 188 offline tests (pytest.ini defaults to -m "not live")
 ```
 
 - Offline unit tests: `core_tests/test_core.py` (platform detection, regex, classifier, options, cancel hook, prefs, anti-hang).
 - Live integration tests: `core_tests/test_plataformas_live.py` hits 8 real URLs, marked `@pytest.mark.live` and **skipped by default**. Run manually only when needed: `.venv/bin/python -m pytest core_tests/test_plataformas_live.py -m live -v`. No CI job for them.
 - Dev deps in `requirements-dev.txt`. CI runs `pytest` on the Linux build before `pyinstaller`; a failure blocks the release.
+
+## Pre-release check (OBLIGATORIO antes de taggear una release)
+
+Antes de crear **cualquier** tag `v*` (que dispara el CI y publica la release), ejecutar SIEMPRE el chequeo E2E real y exigir `RESULTADO: OK`:
+
+```bash
+.venv/bin/python core_tests/pre_release_check.py
+```
+
+Descarga un video real con la misma ruta de código que la app (`core.descargar_musica`) y verifica con `ffprobe`:
+- **video 720p** → contenedor `mp4`, video `h264` (avc1), audio `aac`;
+- **audio 320** → `mp3` válido.
+
+Motivo: el CI solo corre los tests **offline**; los bugs que únicamente aparecen al descargar de verdad (p. ej. YouTube sirviendo AV1 y VLC sin poder abrirlo → "VLC es incapaz de abrir el MRL") no los detecta el CI y llegan a los usuarios. Si el chequeo falla, **NO taggear** hasta arreglarlo.
 
 ## Build standalone executable
 

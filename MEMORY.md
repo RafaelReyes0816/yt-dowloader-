@@ -15,8 +15,9 @@
 
 ## 1. Checkpoint — dónde estamos
 
-- **Última release: v3.4.0** (commit `ddcbf42`, tag `v3.4.0` pusheado a `master`, repo `RafaelReyes0816/yt-dowloader-`). **CI v3.4.0: `success`**, release publicada con `yt-dowloader-linux.{deb,tar.gz}`, `yt-dowloader-macos.{dmg,zip}`, `yt-dowloader-windows-portable.zip` y `YT-DownLoader-Jaeger-Setup.exe`. Anterior: v3.3.1 (commit `2cb32a8`).
-- **Tests: 175 unitarios verdes** (`core_tests/test_core.py`; 133 previos + 42 nuevos de idiomas, outtmpl/tmpdir, idiomas desde `info` y limpieza de restos) + **16 live** (8 plataformas × verificación + detección). `py_compile` OK y smoke UI 2026-09-15/17 (`/tmp/opencode/ui_smoke.py`, requiere `xvfb-run`) → `SMOKE OK`.
+- **Última release: v3.4.1** (commit `2c12642`, tag `v3.4.1` pusheado a `master`, repo `RafaelReyes0816/yt-dowloader-`). **CI v3.4.1: `success`**, release publicada con los mismos 6 assets (`yt-dowloader-linux.{deb,tar.gz}`, `yt-dowloader-macos.{dmg,zip}`, `yt-dowloader-windows-portable.zip`, `YT-DownLoader-Jaeger-Setup.exe`). Anterior: v3.4.0 (commit `ddcbf42`, CI success), v3.3.1 (commit `2cb32a8`).
+- **Tests: 188 unitarios verdes** (`core_tests/test_core.py`; 175 previos + 13 nuevos de compatibilidad de códec/VLC) + **16 live** (8 plataformas × verificación + detección). `py_compile` OK y smoke UI 2026-09-15/17 (`/tmp/opencode/ui_smoke.py`, requiere `xvfb-run`) → `SMOKE OK`. Chequeo E2E real `core_tests/pre_release_check.py` (descarga video 720p + audio 320 y valida códecs con `ffprobe`) → `RESULTADO: OK`.
+- **INCLUIDO EN v3.4.1 (2026-10-17): video en H.264 para que VLC abra los mp4.** yt-dlp elegía AV1 (`av01`) por defecto en los mp4 de YouTube → "VLC es incapaz de abrir el MRL". Los selectores 360p–1080p (YouTube y genéricas) ahora prefieren H.264 (`[vcodec^=avc1]`) + AAC (`bestaudio[ext=m4a]`), con el selector anterior como respaldo; 1440p/2160p quedan intactos (YouTube no sirve H.264 por encima de 1080p).
 - **INCLUIDO EN v3.4.0 (2026-10-17): idiomas + subtítulos incrustados + limpieza de restos + nombres únicos.**
   - **(1) Idioma de audio y de subtítulos** — dropdowns "Idioma audio" e "Idioma subtítulos" (`IDIOMAS_AUDIO = IDIOMAS_SUBTITULOS = [auto, es, en, …]`, nombres en `IDIOMAS_NOMBRES`) + pill "Capturas auto" (`subtitulos_auto`). Prefs nuevas: `idioma_audio`/`idioma_subtitulos` (códigos, default `auto`) y `subtitulos_auto` (default `True`). Audio no-YouTube filtra por `[language=xx]` con respaldo `/best` (`aplicar_idioma_a_selector`); video elige pista de audio igual y subtítulos con `subtitleslangs=p["_patrones_subtitulos"]` (`writeautomaticsub` singular). En modo audio los 3 controles de subtítulos quedan desactivados (`PillToggle.set_pill_disabled` + `App._actualizar_controles_subtitulos`, llamado desde `_actualizar_calidades`).
   - **(2) Subtítulos incrustados** — en video + plataforma con `soporta_subtitulos`: `FFmpegEmbedSubtitle` (`already_have_subtitle=False`) como último PP; yt-dlp borra el `.vtt` suelto (y `_delete_downloaded_files` lo quita de `__files_to_move`, así que no hay warning de archivo faltante).
@@ -24,7 +25,7 @@
   - **(4) Colisiones** — **todas** las plataformas usan `%(title)s [%(id)s].%(ext)s` (antes solo YouTube), evitando que `existing_file` salte una descarga de otro video con el mismo título.
   - **(5) Diagnóstico** — `VentanaDiagnostico` ahora muestra título + `listar_idiomas_audio`/`listar_idiomas_subtitulos` del `info` ya obtenido por `verificar_url` + la preferencia actual (tolerante a playlists).
 - **Fases 0–3 completadas** (seguridad → validación/privacy → UX/limpieza). Nada pendiente de implementar excepto los "open items" de seguridad (sección 6).
-- `__version__ = "3.4.0"` en **`yt-dowloader.py:2`**. `GITHUB_REPO = "RafaelReyes0816/yt-dowloader-"` en `core.py:10` (debe coincidir con el remoto o el auto-update del GITHUB_REPO no funciona).
+- `__version__ = "3.4.1"` en **`yt-dowloader.py:2`**. `GITHUB_REPO = "RafaelReyes0816/yt-dowloader-"` en `core.py:10` (debe coincidir con el remoto o el auto-update del GITHUB_REPO no funciona).
 
 ## 2. Arquitectura (mapa mental rápido)
 
@@ -36,8 +37,9 @@
 ## 3. Comandos de verificación (siempre antes de commitear)
 
 ```bash
-.venv/bin/python -m pytest core_tests/test_core.py -m "not live" -q      # 175 passed
+.venv/bin/python -m pytest core_tests/test_core.py -m "not live" -q      # 188 passed
 .venv/bin/python -m py_compile yt-dowloader.py core.py theme.py          # OK
+.venv/bin/python core_tests/pre_release_check.py                         # RESULTADO: OK (E2E real, OBLIGATORIO antes de taggear)
 .venv/bin/python -m pytest core_tests/test_plataformas_live.py -m live -v  # 16 passed (solo si hace falta, golpe a red real)
 ```
 
@@ -53,8 +55,8 @@ Para **cualquier cambio futuro**, seguir este loop (no perderlo; es lo que manti
 1. **RED — escribir primero el test que falla** en `core_tests/test_core.py` sobre `core.py` (lógica pura, sin UI). Nombrar bien el test (ej: `TestConstantesCalidades`, `TestPrefsLimpiaTema`). Correr `.venv/bin/python -m pytest -k <test>` → ver que falla por el motivo correcto.
 2. **GREEN — implementación mínima** en `core.py`/`yt-dowloader.py` hasta que pase. **Nada de UI/red en import de `core.py`** (si se necesita network/cancel, parametrizar: `cancel_flag`, `ydl_holder`, `postprocessor_callback`).
 3. **REFACTOR — consolidar después de verde**: mover constantes a `core.py` (la UI no hardcodea), purgar legacy (claves viejas de prefs), unificar patrones repetidos (spinners → `_pintar_anillo(canvas, cx, cy, r, width, angle, color, con_fondo=True)`), borrar código muerto (`ACCION_BOTON` fue eliminado).
-4. **VERIFY — suite completa**: 175 tests + `py_compile`. Si el cambio toca UI, smoke test; si toca plataformas, live tests manuales.
-5. **REGISTER — commit + tag + push y PROBAR el ciclo completo una vez más antes de la release** (la suite actual tiene 175 tests verdes; recordar que un tag *lightweight* NO sube con `--follow-tags` → subirlo con `git push origin tag vX.Y.Z`).
+4. **VERIFY — suite completa**: 188 tests + `py_compile`. Si el cambio toca UI, smoke test; si toca plataformas o códecs, **`core_tests/pre_release_check.py`** (descarga real) antes de taggear.
+5. **REGISTER — commit + tag + push y PROBAR el ciclo completo una vez más antes de la release** (la suite actual tiene 188 tests verdes; recordar que un tag *lightweight* NO sube con `--follow-tags` → subirlo con `git push origin tag vX.Y.Z`; OBLIGATORIO correr `core_tests/pre_release_check.py` y exigir `RESULTADO: OK` antes de crear el tag).
 6. **UPDATE — actualizar `MEMORY.md` en el commit final / tras la build** (ver regla al inicio): nuevo `__version__`, hash del commit/tag, resultado de CI, nº de tests y pendientes/quirks nuevos. Esto evita arrancar la próxima sesión con contexto desincronizado.
 
 ## 5. Detalles críticos de customtkinter 6.0.0 (costaron el smoke test)
@@ -85,7 +87,7 @@ Para **cualquier cambio futuro**, seguir este loop (no perderlo; es lo que manti
 - UI **100% en español**, hints en sentence case ("Pega una URL para empezar", "URL no compatible · …", "Ya está en cola").
 - Tipó de nombre `dowloader` (sin 'n') es **intencional** (spec de PyInstaller): no renombrar sin actualizar `yt-dowloader.spec`.
 - `yt-dowloader.spec` es multiplataforma (sin `target_arch`), incluye hiddenimports `curl_cffi`/`curl_cffi.requests` (fix TikTok v3.1: yt-dlp >= 2026.8.19 con `[default,curl-cffi]`).
-- Calidad YouTube: 360p–1080p con `[ext=mp4]`; 1440p/2160p **sin** `[ext=mp4]` (solo VP9/AV1).
+- Calidad YouTube (v3.4.1): 360p–1080p **prefieren H.264** (`[vcodec^=avc1]`) + `bestaudio[ext=m4a]` con respaldo del selector anterior (yt-dlp elegía AV1 → VLC no abría el mp4); 1440p/2160p **sin** `[ext=mp4]` (solo VP9/AV1, sin H.264 disponible).
 - Cancel: `cancel_flag` (threading.Event) + `ydl_holder` (dict); paralelismo opcional `max_paralelas` (1–3) con `ThreadPoolExecutor`; toda UI update va por `self.after(0, ...)`.
 - Git commit style: `feat vX.Y.Z: ...` / `fix ...` (español). Remoto: `origin` = `https://github.com/RafaelReyes0816/yt-dowloader-.git`.
 
@@ -94,5 +96,5 @@ Para **cualquier cambio futuro**, seguir este loop (no perderlo; es lo que manti
 1. **SEC-03** (regex de plataforma anclada al host) con tests (red→green→refactor, pasos de la sección 4).
 2. **SEC-04** (`chmod 0600` + validar `saved` dict) con test de redondeo de prefs.
 3. Si aplica: smoke test GUI de nuevo tras esos cambios (`/tmp/opencode/smoke_ui.py`).
-4. **v3.4.0 YA LANZADA** (2026-10-17, commit `ddcbf42`, CI success, assets publicados) — ver sección 1. Próxima release tras SEC-03/SEC-04: bump a v3.4.1/v3.5.0 y **tag + push EXPLÍCITO del tag** (`git push origin vX.Y.Z`; recordar lección de `--follow-tags`).
+4. **v3.4.1 YA LANZADA** (2026-10-17, commit `2c12642`, CI success, assets publicados) — ver sección 1. Próxima release tras SEC-03/SEC-04: bump a v3.4.2/v3.5.0 y **tag + push EXPLÍCITO del tag** (`git push origin vX.Y.Z`; recordar la lección de `--follow-tags` **y correr siempre `core_tests/pre_release_check.py` antes de taggear**).
 5. **NO cerrar la sesión sin actualizar `MEMORY.md`** con el estado final (versión, commit/tag, CI, tests) — la regla obligatoria del inicio de este archivo.
