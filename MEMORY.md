@@ -1,6 +1,6 @@
 # MEMORY.md — Memoria de sesión (borrable cuando no haga falta)
 
-> Resumen para retomar el trabajo **sin re-descubrir** lo de hoy. Reusa la estructura de `AGENTS.md` y `SKILLS_PROYECTO.md` y el approach *red → green → refactor*. Este archivo es **temporal**: se puede borrar del workspace cuando se quiera. No está en git (no se committed).
+> Resumen para retomar el trabajo **sin re-descubrir** lo de hoy. Reusa la estructura de `AGENTS.md` y `SKILLS_PROYECTO.md` y el approach *red → green → refactor*. Este archivo es **temporal**: se puede borrar del workspace cuando se quiera. (Nota: a pesar de lo que decía antes, SÍ está commiteado en git — se usa como checkpoint versionado.)
 
 > ⚠️ **REGLA OBLIGATORIA:** cada vez que se haga **el commit final de una tanda de cambios y se lance la build/release**, actualizar este `MEMORY.md` ANTES de cerrar sesión: bump de `__version__`, hash del commit/tag, estado de la build (CI), conteo de tests y cualquier detalle nuevo (quirks, decisiones, pendientes abiertos). Si no se actualiza, la próxima sesión arranca con contexto desincronizado y se pierde trazabilidad.
 
@@ -15,14 +15,13 @@
 
 ## 1. Checkpoint — dónde estamos
 
-- **Última release: v3.3.0** (commit `0343e25`, tag `v3.3.0` pusheado a `master` de GitHub, repo `RafaelReyes0816/yt-dowloader-`). El CI de GitHub Actions (`.github/workflows/build.yml`) se dispara en tag push `v*` y publica ejecutables de Linux/Windows/macOS con `softprops/action-gh-release`.
-- **Tests: 133 unitarios verdes** (`core_tests/test_core.py`; 127 previos + 6 nuevos de anti-hang y cancel en postproceso) + **16 live verdes** (8 plataformas × verificación + detección). `py_compile` OK y smoke UI (`/tmp/opencode/smoke_bugs.py`) → `SMOKE OK`.
-- **Bug-fix 2026-09-15 — IMPLEMENTADO y VERIFICADO, SIN release todavía** (pendiente bump `__version__` → v3.3.1 + commit/tag/push):
-  - **(1) Anti-hang** — `socket_timeout=TIMEOUT_RED` (20s) en verificación y descarga + `_opciones_base` fuerza `noplaylist=True` (la verificación ya NO crawlea una playlist completa; antes podía colgarse para siempre).
-  - **(2) Cancel también aborta en postproceso** — `postprocessor_hook` chequea `cancel_flag` (antes la conversión ignoraba la cancelación y el botón quedaba atascado en "Descargando"). `_limpiar_cola` ahora aborta fuerte (`_cancelar_item_fuerte` = flag + `ydl._download_retcode`) + `stop_all` y resetea botones al instante. Guard anti-carrera `_cola_run_id`: el `finally` de un worker viejo no pisa los botones de una corrida nueva.
-  - **(3) `VentanaDiagnostico` se abre encima** — `transient(master)` + `_encima()` diferido 120 ms (`deiconify`+`lift`+`focus_force`+`-topmost` 300 ms). Llamar `lift()` en `__init__` antes de que la ventana esté mapeada falla en silencio → se abría detrás de la ventana principal.
+- **Última release: v3.3.2** (tag anotado `v3.3.2` pusheado, CI run `39096286073` **success**, 6 assets publicados: `yt-dowloader-linux.{deb,tar.gz}`, `yt-dowloader-macos.{dmg,zip}`, `yt-dowloader-windows-portable.zip`, `YT-DownLoader-Jaeger-Setup.exe`). `__version__ = "3.3.2"` en `yt-dowloader.py:2`.
+- **v3.3.2 = árbol de v3.3.1 + fix H.264 reaplicado.** El 2026-10-18 se hizo `git read-tree -u --reset v3.3.1` (commit `29df811`) para **quitar toda la línea v3.4.x** (selectores de idioma de audio/subtítulos, subtítulos incrustados, tmpdir "sin restos", nombres únicos, pre_release_check.py) a petición del usuario (issues #1/#2 con VLC y WMP). Después se cherry-pickó `2c12642` (fix H.264 `avc1`, commit local `8802db7` — **su mensaje de commit dice "fix v3.4.1" y es engañoso**, es el fix reaplicado sobre v3.3.1) y se bumpió a v3.3.2 (commit `c92f72a`). **Atención:** el cherry-pick trajo conflictos en AGENTS.md/test_core.py (los tests de idiomas/tmpdir de v3.4.x se descartaron a mano).
+- **Tests: 146 unitarios verdes** (133 de v3.3.1 + 13 de `TestCompatibilidadCodecVlc`) + 16 live deselected. E2E manual de release (`/tmp/opencode/e2e332.py`): mp3 OK + mp4 720p **h264/avc1 + aac** (antes del fix salía av01). `py_compile` OK.
+- **`pre_release_check.py` YA NO EXISTE** (se eliminó en el revert; fue añadido en v3.4.1). El pre-check E2E se hace con el script manual + pytest. Si se quiere volver a automatizar, recrearlo.
+- **Issues de GitHub**: #1 (VLC "incapaz de abrir el MRL", reportado con v3.4.2) y #2 (WMP no puede abrir mp3) — #1 quedará **cerrado con comentario** (resuelto en v3.3.2 con el fix avc1; si reaparece, reabrir). La línea v3.4.x queda **cerrada hasta encontrar la solución** a lo que motivó el revert.
 - **Fases 0–3 completadas** (seguridad → validación/privacy → UX/limpieza). Nada pendiente de implementar excepto los "open items" de seguridad (sección 6).
-- `__version__ = "3.3.0"` en **`yt-dowloader.py:2`**. `GITHUB_REPO = "RafaelReyes0816/yt-dowloader-"` en `core.py:10` (debe coincidir con el remoto o el auto-update del GITHUB_REPO no funciona).
+- `GITHUB_REPO = "RafaelReyes0816/yt-dowloader-"` en `core.py:10` (debe coincidir con el remoto o el auto-update del GITHUB_REPO no funciona).
 
 ## 2. Arquitectura (mapa mental rápido)
 
@@ -34,7 +33,7 @@
 ## 3. Comandos de verificación (siempre antes de commitear)
 
 ```bash
-.venv/bin/python -m pytest core_tests/test_core.py -m "not live" -q      # 133 passed
+.venv/bin/python -m pytest core_tests/test_core.py -m "not live" -q      # 146 passed
 .venv/bin/python -m py_compile yt-dowloader.py core.py theme.py          # OK
 .venv/bin/python -m pytest core_tests/test_plataformas_live.py -m live -v  # 16 passed (solo si hace falta, golpe a red real)
 ```
@@ -50,8 +49,8 @@ Para **cualquier cambio futuro**, seguir este loop (no perderlo; es lo que manti
 1. **RED — escribir primero el test que falla** en `core_tests/test_core.py` sobre `core.py` (lógica pura, sin UI). Nombrar bien el test (ej: `TestConstantesCalidades`, `TestPrefsLimpiaTema`). Correr `.venv/bin/python -m pytest -k <test>` → ver que falla por el motivo correcto.
 2. **GREEN — implementación mínima** en `core.py`/`yt-dowloader.py` hasta que pase. **Nada de UI/red en import de `core.py`** (si se necesita network/cancel, parametrizar: `cancel_flag`, `ydl_holder`, `postprocessor_callback`).
 3. **REFACTOR — consolidar después de verde**: mover constantes a `core.py` (la UI no hardcodea), purgar legacy (claves viejas de prefs), unificar patrones repetidos (spinners → `_pintar_anillo(canvas, cx, cy, r, width, angle, color, con_fondo=True)`), borrar código muerto (`ACCION_BOTON` fue eliminado).
-4. **VERIFY — suite completa**: 133 tests + `py_compile`. Si el cambio toca UI, smoke test; si toca plataformas, live tests manuales.
-5. **REGISTER — commit + tag + push y PROBAR el ciclo completo una vez más antes de la release** (la suite actual tiene 133 tests verdes; recordar que un tag *lightweight* NO sube con `--follow-tags` → subirlo con `git push origin tag vX.Y.Z`).
+4. **VERIFY — suite completa**: 146 tests + `py_compile`. Si el cambio toca UI, smoke test; si toca plataformas, live tests manuales.
+5. **REGISTER — commit + tag + push y PROBAR el ciclo completo una vez más antes de la release** (la suite actual tiene 146 tests verdes; recordar que un tag *lightweight* NO sube con `--follow-tags` → subirlo con `git push origin tag vX.Y.Z`).
 6. **UPDATE — actualizar `MEMORY.md` en el commit final / tras la build** (ver regla al inicio): nuevo `__version__`, hash del commit/tag, resultado de CI, nº de tests y pendientes/quirks nuevos. Esto evita arrancar la próxima sesión con contexto desincronizado.
 
 ## 5. Detalles críticos de customtkinter 6.0.0 (costaron el smoke test)
@@ -82,7 +81,7 @@ Para **cualquier cambio futuro**, seguir este loop (no perderlo; es lo que manti
 - UI **100% en español**, hints en sentence case ("Pega una URL para empezar", "URL no compatible · …", "Ya está en cola").
 - Tipó de nombre `dowloader` (sin 'n') es **intencional** (spec de PyInstaller): no renombrar sin actualizar `yt-dowloader.spec`.
 - `yt-dowloader.spec` es multiplataforma (sin `target_arch`), incluye hiddenimports `curl_cffi`/`curl_cffi.requests` (fix TikTok v3.1: yt-dlp >= 2026.8.19 con `[default,curl-cffi]`).
-- Calidad YouTube: 360p–1080p con `[ext=mp4]`; 1440p/2160p **sin** `[ext=mp4]` (solo VP9/AV1).
+- Calidad YouTube: 360p–1080p con `[ext=mp4]` **+ pref H.264 `[vcodec^=avc1]` + AAC `[ext=m4a]` con respaldo** (fix reaplicado en v3.3.2; VLC no abre AV1/VP9 en mp4); 1440p/2160p **sin** `[ext=mp4]` ni filtro avc1 (solo VP9/AV1).
 - Cancel: `cancel_flag` (threading.Event) + `ydl_holder` (dict); paralelismo opcional `max_paralelas` (1–3) con `ThreadPoolExecutor`; toda UI update va por `self.after(0, ...)`.
 - Git commit style: `feat vX.Y.Z: ...` / `fix ...` (español). Remoto: `origin` = `https://github.com/RafaelReyes0816/yt-dowloader-.git`.
 
@@ -91,5 +90,6 @@ Para **cualquier cambio futuro**, seguir este loop (no perderlo; es lo que manti
 1. **SEC-03** (regex de plataforma anclada al host) con tests (red→green→refactor, pasos de la sección 4).
 2. **SEC-04** (`chmod 0600` + validar `saved` dict) con test de redondeo de prefs.
 3. Si aplica: smoke test GUI de nuevo tras esos cambios (`/tmp/opencode/smoke_ui.py`).
-4. **Release v3.3.1 (LISTA PARA LANZAR)** — los 3 bug-fixes están implementados y verificados (ver sección 1), pero `__version__` sigue en `"3.3.0"`. Pasos: bump `__version__` → `"3.3.1"` en `yt-dowloader.py:2`, commit mensaje `fix v3.3.1: antihang (socket_timeout/noplaylist), cancel en postproceso + boton atascado, diagnostico encima`, y **tag v3.3.1 + push EXPLÍCITO del tag** (`git push origin v3.3.1`; recordar lección de `--follow-tags`).
-5. **NO cerrar la sesión sin actualizar `MEMORY.md`** con el estado final (versión, commit/tag, CI, tests) — la regla obligatoria del inicio de este archivo.
+4. **NO cerrar la sesión sin actualizar `MEMORY.md`** con el estado final (versión, commit/tag, CI, tests) — la regla obligatoria del inicio de este archivo.
+5. **Pendiente del revert (2026-10-18)**: entender QUÉ de la línea v3.4.x causaba los problemas del usuario (se revertió completo sin diagnóstico final; issues #1/#2 dieron pistas pero no raíz confirmada). Si se retoma v3.4.x, re-aplicar selectores de idioma sobre la base actual (v3.3.2) en vez de sobre v3.3.1.
+6. Opcional: recrear `core_tests/pre_release_check.py` (E2E automatizado pre-release; se eliminó en el revert).
