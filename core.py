@@ -3,7 +3,6 @@ import re
 import json
 import sys
 import shutil
-import tempfile
 import urllib.request
 
 import yt_dlp
@@ -155,19 +154,19 @@ PLATAFORMA_DOMINIOS = {
 }
 
 RESOLUCIONES_YOUTUBE = {
-    "360p": "bestvideo[height<=360][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/mp4",
-    "480p": "bestvideo[height<=480][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/mp4",
-    "720p": "bestvideo[height<=720][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/mp4",
-    "1080p": "bestvideo[height<=1080][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/mp4",
+    "360p": "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/mp4",
+    "480p": "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/mp4",
+    "720p": "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/mp4",
+    "1080p": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/mp4",
     "1440p": "bestvideo[height<=1440]+bestaudio/best[height<=1440]",
     "2160p": "bestvideo[height<=2160]+bestaudio/best[height<=2160]",
 }
 
 RESOLUCIONES_GENERICAS = {
-    "360p": "bestvideo[height<=360][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=360]+bestaudio/best[height<=360]/best",
-    "480p": "bestvideo[height<=480][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=480]+bestaudio/best[height<=480]/best",
-    "720p": "bestvideo[height<=720][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]/best",
-    "1080p": "bestvideo[height<=1080][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+    "360p": "bestvideo[height<=360]+bestaudio/best[height<=360]/best",
+    "480p": "bestvideo[height<=480]+bestaudio/best[height<=480]/best",
+    "720p": "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+    "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
     "1440p": "bestvideo[height<=1440]+bestaudio/best[height<=1440]/best",
     "2160p": "bestvideo[height<=2160]+bestaudio/best[height<=2160]/best",
 }
@@ -189,221 +188,6 @@ PLATAFORMAS_CONFIG = {
     "Twitter/X": {"soporta_subtitulos": False},
     "Reddit": {"soporta_subtitulos": False},
 }
-
-IDIOMA_AUTO = "auto"
-
-IDIOMAS_CODIGOS = ["es", "en", "pt", "fr", "de", "it", "ja", "ko", "zh", "ru", "ar"]
-
-IDIOMAS_NOMBRES = {
-    "auto": "Auto (idioma original)",
-    "es": "Español",
-    "en": "Inglés",
-    "pt": "Portugués",
-    "fr": "Francés",
-    "de": "Alemán",
-    "it": "Italiano",
-    "ja": "Japonés",
-    "ko": "Coreano",
-    "zh": "Chino",
-    "ru": "Ruso",
-    "ar": "Árabe",
-}
-
-IDIOMAS_AUDIO = [IDIOMA_AUTO, *IDIOMAS_CODIGOS]
-IDIOMAS_SUBTITULOS = [IDIOMA_AUTO, *IDIOMAS_CODIGOS]
-
-SUBTITULOS_AUTO_FALLBACK = ["es", "en", "pt"]
-
-EXTENSIONES_MEDIA = {
-    ".mp3", ".mp4", ".m4a", ".m4v", ".mov", ".webm", ".mkv", ".avi",
-    ".flac", ".ogg", ".opus", ".wav", ".aac", ".3gp", ".wma",
-}
-EXTENSIONES_SUBTITULO = {".vtt", ".srt", ".ass", ".ssa", ".lrc", ".sub"}
-_EXT_MEDIA_RE = "(?:" + "|".join(
-    re.escape(e.lstrip(".")) for e in sorted(EXTENSIONES_MEDIA)
-) + ")"
-_RESTO_TEMPORAL_RE = re.compile(
-    r"\.part(?:-Frag\d+)?(?:\.part)?$"
-    r"|\.part-Frag\d+$"
-    r"|\.ytdl$"
-    r"|\.temp\." + _EXT_MEDIA_RE + r"$"
-    r"|\.orig\." + _EXT_MEDIA_RE + r"$"
-    r"|\.keyframes\.temp$",
-    re.IGNORECASE,
-)
-_PREFIJO_TMPDIR = ".tmp-"
-
-
-def _patron_idioma(codigo):
-    """Patron yt-dlp para un codigo de idioma (fullmatch; yt-dlp lo aplica con re.I).
-
-    Coincide con el codigo base y con variantes de sufijo largo/numerico
-    (es-419, zh-Hans, en-orig). NO coincide con sufijos de 2 letras: bajo re.I
-    "en-US" (region) y "en-de" (traduccion automatica) serian indistinguibles,
-    y capturar todas las traducciones provoca rafagas de peticiones que
-    YouTube responde con HTTP 429, abortando la descarga completa.
-    """
-    return rf"{re.escape(codigo)}(?:-(?:[A-Za-z]{{3,}}|[0-9]{{2,4}}))?"
-
-
-def _patrones_subtitulos(idioma):
-    if not idioma or idioma == IDIOMA_AUTO:
-        codigos = SUBTITULOS_AUTO_FALLBACK
-    else:
-        codigos = [idioma]
-    return [_patron_idioma(c) for c in codigos]
-
-
-def aplicar_idioma_a_selector(selector, idioma):
-    """Filtra por `language` manteniendo siempre el sufijo de respaldo del selector."""
-    if not selector or not idioma or idioma == IDIOMA_AUTO:
-        return selector
-    if "[language=" in selector:
-        return selector
-    salida = re.sub(
-        r"(bestaudio)(?!\w)((?:\[[^\]]*\])*)",
-        lambda m: f"{m.group(1)}{m.group(2)}[language={re.escape(idioma)}]",
-        selector,
-        count=1,
-    )
-    if salida == selector or "/" in salida:
-        return salida
-    return salida + "/best"
-
-
-def _info_simple_para_idiomas(info):
-    if not isinstance(info, dict):
-        return None
-    if info.get("_type") in ("playlist", "multi_video") or info.get("entries") is not None:
-        return None
-    return info
-
-
-def listar_idiomas_audio(info):
-    """Codigos de pista de audio disponibles en `info` (sin consumir entradas de playlist)."""
-    info = _info_simple_para_idiomas(info)
-    if info is None:
-        return []
-    formats = info.get("formats")
-    if not isinstance(formats, list):
-        return []
-    codigos = []
-    for fmt in formats:
-        if not isinstance(fmt, dict) or fmt.get("acodec") == "none":
-            continue
-        lang = fmt.get("language") or fmt.get("language_code")
-        if isinstance(lang, str) and lang and lang not in codigos:
-            codigos.append(lang)
-    return codigos
-
-
-def listar_idiomas_subtitulos(info):
-    """Codigos con manuales y con subtitulos automaticos disponibles en `info`."""
-    info = _info_simple_para_idiomas(info)
-    if info is None:
-        return []
-    codigos = []
-    for clave in ("subtitles", "automatic_captions"):
-        datos = info.get(clave)
-        if not isinstance(datos, dict):
-            continue
-        for lang in datos:
-            if isinstance(lang, str) and lang and lang not in codigos:
-                codigos.append(lang)
-    return codigos
-
-
-def _es_temporal(nombre):
-    return bool(_RESTO_TEMPORAL_RE.search(nombre))
-
-
-def _es_tmpdir(nombre, ruta):
-    return nombre.startswith(_PREFIJO_TMPDIR) and os.path.isdir(ruta)
-
-
-def _es_media(nombre):
-    return os.path.splitext(nombre)[1].lower() in EXTENSIONES_MEDIA
-
-
-def _es_subtitulo(nombre):
-    return os.path.splitext(nombre)[1].lower() in EXTENSIONES_SUBTITULO
-
-
-def listar_subtitulos_huerfanos(carpeta):
-    """Subtitulos sueltos cuyo nombre corresponde a un archivo de la misma carpeta."""
-    if not carpeta or not os.path.isdir(carpeta):
-        return []
-    try:
-        nombres = sorted(os.listdir(carpeta))
-    except OSError:
-        return []
-    bases_media = set()
-    for nombre in nombres:
-        ruta = os.path.join(carpeta, nombre)
-        if os.path.isfile(ruta) and _es_media(nombre):
-            bases_media.add(os.path.splitext(nombre)[0])
-    huerfanos = []
-    for nombre in nombres:
-        ruta = os.path.join(carpeta, nombre)
-        if not os.path.isfile(ruta) or not _es_subtitulo(nombre):
-            continue
-        stem = os.path.splitext(nombre)[0]
-        base, _, variante = stem.rpartition(".")
-        if stem in bases_media or (variante and base in bases_media):
-            huerfanos.append(nombre)
-    return huerfanos
-
-
-def listar_restos(carpeta):
-    """Separa temporales (basura segura) de subtitulos sueltos que si requieren decision."""
-    vacio = {"temporales": [], "subtitulos": []}
-    if not carpeta or not os.path.isdir(carpeta):
-        return vacio
-    try:
-        nombres = sorted(os.listdir(carpeta))
-    except OSError:
-        return dict(vacio)
-    temporales = []
-    for nombre in nombres:
-        ruta = os.path.join(carpeta, nombre)
-        if _es_tmpdir(nombre, ruta) or (os.path.isfile(ruta) and _es_temporal(nombre)):
-            temporales.append(nombre)
-    return {"temporales": temporales, "subtitulos": listar_subtitulos_huerfanos(carpeta)}
-
-
-def limpiar_restos(carpeta, incluir_subtitulos=False):
-    """Borra temporales de descarga en `carpeta`. Nunca toca archivos de audio/video."""
-    if not carpeta or not os.path.isdir(carpeta):
-        return []
-    borrados = []
-    try:
-        nombres = sorted(os.listdir(carpeta))
-    except OSError:
-        return borrados
-    subtitulo_incluido = set(listar_subtitulos_huerfanos(carpeta)) if incluir_subtitulos else set()
-    for nombre in nombres:
-        ruta = os.path.join(carpeta, nombre)
-        if os.path.isdir(ruta):
-            if _es_tmpdir(nombre, ruta):
-                shutil.rmtree(ruta, ignore_errors=True)
-                borrados.append(nombre)
-            continue
-        if not os.path.isfile(ruta):
-            continue
-        if _es_temporal(nombre):
-            borrar = True
-        elif _es_media(nombre):
-            borrar = False
-        else:
-            borrar = nombre in subtitulo_incluido
-        if not borrar:
-            continue
-        try:
-            os.remove(ruta)
-            borrados.append(nombre)
-        except OSError:
-            pass
-    return borrados
 
 
 class DescargaCancelada(Exception):
@@ -617,9 +401,6 @@ def cargar_preferencias():
         "navegador": "",
         "max_paralelas": 1,
         "ocultar_urls": True,
-        "idioma_audio": IDIOMA_AUTO,
-        "idioma_subtitulos": IDIOMA_AUTO,
-        "subtitulos_auto": True,
     }
     try:
         if os.path.isfile(CONFIG_FILE):
@@ -713,10 +494,7 @@ def verificar_url(url, navegador=None, cancel_flag=None):
         return resultado
 
 
-def _construir_opciones_descarga(url, carpeta, modo, calidad, subtitulos, playlist,
-                                 progreso_callback=None, cancel_flag=None, postprocessor_callback=None,
-                                 idioma_audio=IDIOMA_AUTO, idioma_subtitulos=IDIOMA_AUTO,
-                                 subtitulos_auto=True, tmpdir=None):
+def _construir_opciones_descarga(url, carpeta, modo, calidad, subtitulos, playlist, progreso_callback=None, cancel_flag=None, postprocessor_callback=None):
     plataforma = detectar_plataforma(url)
     youtube = plataforma == "YouTube"
 
@@ -740,14 +518,13 @@ def _construir_opciones_descarga(url, carpeta, modo, calidad, subtitulos, playli
 
     ffmpeg_path = find_ffmpeg()
 
-    plantilla = "%(title)s [%(id)s].%(ext)s"
-    destino = tmpdir if tmpdir else carpeta
+    if youtube:
+        outtmpl = os.path.join(carpeta, "%(title)s [%(id)s].%(ext)s")
+    else:
+        outtmpl = os.path.join(carpeta, "%(title)s.%(ext)s")
+
     opciones = {
-        "outtmpl": {
-            "default": os.path.join(carpeta, plantilla),
-            "temp": os.path.join(destino, plantilla),
-            "subtitle": os.path.join(destino, plantilla),
-        },
+        "outtmpl": outtmpl,
         "noplaylist": not playlist,
         "progress_hooks": [progress_hook],
         "socket_timeout": TIMEOUT_RED,
@@ -757,50 +534,45 @@ def _construir_opciones_descarga(url, carpeta, modo, calidad, subtitulos, playli
     if ffmpeg_path:
         opciones["ffmpeg_location"] = ffmpeg_path
 
-    soporta_subtitulos = PLATAFORMAS_CONFIG.get(plataforma, {}).get("soporta_subtitulos", False)
-    if modo == "video" and soporta_subtitulos and subtitulos:
+    if youtube and subtitulos:
         opciones["writesubtitles"] = True
-        opciones["subtitleslangs"] = _patrones_subtitulos(idioma_subtitulos)
-        if subtitulos_auto:
-            opciones["writeautomaticsub"] = True
+        opciones["subtitleslangs"] = ["es", "en", "pt"]
 
     if modo == "audio":
-        opciones["format"] = aplicar_idioma_a_selector("bestaudio/best", idioma_audio)
-        opciones["postprocessors"] = [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": calidad,
-        }]
-        opciones["prefer_ffmpeg"] = True
         if youtube:
+            opciones["format"] = "bestaudio/best"
+            opciones["postprocessors"] = [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": calidad,
+            }]
             opciones["postprocessor_args"] = ["-ar", "44100"]
+            opciones["prefer_ffmpeg"] = True
+        else:
+            opciones["format"] = "bestaudio/best"
+            opciones["postprocessors"] = [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": calidad,
+            }]
+            opciones["prefer_ffmpeg"] = True
     else:
         if youtube:
-            selector = RESOLUCIONES_YOUTUBE.get(calidad, RESOLUCIONES_YOUTUBE["720p"])
+            opciones["format"] = RESOLUCIONES_YOUTUBE.get(calidad, RESOLUCIONES_YOUTUBE["720p"])
+            opciones["merge_output_format"] = "mp4"
+            opciones["prefer_ffmpeg"] = True
         else:
-            selector = RESOLUCIONES_GENERICAS.get(calidad, RESOLUCIONES_GENERICAS["720p"])
-        opciones["format"] = aplicar_idioma_a_selector(selector, idioma_audio)
-        opciones["merge_output_format"] = "mp4"
-        opciones["prefer_ffmpeg"] = True
-        if youtube and subtitulos:
-            opciones["postprocessors"] = [{
-                "key": "FFmpegEmbedSubtitle",
-                "already_have_subtitle": False,
-            }]
+            opciones["format"] = RESOLUCIONES_GENERICAS.get(calidad, RESOLUCIONES_GENERICAS["720p"])
+            opciones["merge_output_format"] = "mp4"
+            opciones["prefer_ffmpeg"] = True
 
     return opciones
 
 
-def descargar_musica(url, carpeta, modo, calidad, subtitulos=False, playlist=False,
-                     progress_callback=None, speed_callback=None, navegador=None,
-                     cancel_flag=None, ydl_holder=None, postprocessor_callback=None,
-                     idioma_audio=IDIOMA_AUTO, idioma_subtitulos=IDIOMA_AUTO,
-                     subtitulos_auto=True):
+def descargar_musica(url, carpeta, modo, calidad, subtitulos=False, playlist=False, progress_callback=None, speed_callback=None, navegador=None, cancel_flag=None, ydl_holder=None, postprocessor_callback=None):
     plataforma = detectar_plataforma(url)
-    tmpdir = None
     try:
         os.makedirs(carpeta, exist_ok=True)
-        tmpdir = tempfile.mkdtemp(prefix=_PREFIJO_TMPDIR, dir=carpeta)
 
         def blended_hook(d):
             if d["status"] == "downloading" and speed_callback:
@@ -814,8 +586,6 @@ def descargar_musica(url, carpeta, modo, calidad, subtitulos=False, playlist=Fal
             url, carpeta, modo, calidad, subtitulos, playlist,
             progreso_callback=progress_callback, cancel_flag=cancel_flag,
             postprocessor_callback=postprocessor_callback,
-            idioma_audio=idioma_audio, idioma_subtitulos=idioma_subtitulos,
-            subtitulos_auto=subtitulos_auto, tmpdir=tmpdir,
         )
         opciones.update(construir_opciones_cookies(navegador))
 
@@ -855,9 +625,6 @@ def descargar_musica(url, carpeta, modo, calidad, subtitulos=False, playlist=Fal
                 mensaje += "\n\nDetalle tecnico:\n" + detalle
             return False, mensaje, None
         return False, clasificado["mensaje"], clasificado.get("tipo")
-    finally:
-        if tmpdir:
-            shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def check_for_update(current_version):

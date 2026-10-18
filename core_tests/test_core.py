@@ -1,9 +1,7 @@
 import os
-import re
 import threading
 
 import pytest
-from yt_dlp.utils import orderedSet_from_options
 
 from core import (
     PLATFORM_REGEX,
@@ -13,23 +11,10 @@ from core import (
     comparar_versiones,
     _construir_opciones_descarga,
     _opciones_base,
-    _patron_idioma,
-    _patrones_subtitulos,
-    aplicar_idioma_a_selector,
-    descargar_musica,
     DescargaCancelada,
-    IDIOMAS_AUDIO,
-    IDIOMAS_CODIGOS,
-    IDIOMAS_SUBTITULOS,
     PLATAFORMAS_CONFIG,
     RESOLUCIONES_YOUTUBE,
     RESOLUCIONES_GENERICAS,
-    SUBTITULOS_AUTO_FALLBACK,
-    listar_idiomas_audio,
-    listar_idiomas_subtitulos,
-    listar_restos,
-    listar_subtitulos_huerfanos,
-    limpiar_restos,
     verificar_url,
     cargar_preferencias,
     guardar_preferencias,
@@ -155,25 +140,8 @@ class TestConstruirOpciones:
         opts = _construir_opciones_descarga(
             "https://youtube.com/watch?v=x", "/tmp/out", "audio", "320", False, False
         )
-        assert "%(id)s" in opts["outtmpl"]["default"]
-        assert opts["outtmpl"]["default"] == os.path.join("/tmp/out", "%(title)s [%(id)s].%(ext)s")
-
-    def test_outtmpl_es_diccionario_con_temp_y_subtitulo(self):
-        opts = _construir_opciones_descarga(
-            "https://youtube.com/watch?v=x", "/tmp/out", "audio", "320", False, False,
-            tmpdir="/tmp/out/.tmp-xyz",
-        )
-        plantilla = "%(title)s [%(id)s].%(ext)s"
-        assert opts["outtmpl"]["default"] == os.path.join("/tmp/out", plantilla)
-        assert opts["outtmpl"]["temp"] == os.path.join("/tmp/out/.tmp-xyz", plantilla)
-        assert opts["outtmpl"]["subtitle"] == os.path.join("/tmp/out/.tmp-xyz", plantilla)
-
-    def test_outtmpl_temp_sin_tmpdir_usa_carpeta_destino(self):
-        opts = _construir_opciones_descarga(
-            "https://youtube.com/watch?v=x", "/tmp/out", "audio", "320", False, False
-        )
-        assert opts["outtmpl"]["temp"].startswith("/tmp/out" + os.sep)
-        assert opts["outtmpl"]["subtitle"].startswith("/tmp/out" + os.sep)
+        assert "%(id)s" in opts["outtmpl"]
+        assert os.path.join("/tmp/out", "") + "%(title)s [%(id)s].%(ext)s" in opts["outtmpl"].replace("\\\\", "/")
 
     def test_youtube_video_formato_1080p(self):
         opts = _construir_opciones_descarga(
@@ -182,15 +150,14 @@ class TestConstruirOpciones:
         assert "1080" in opts["format"]
         assert opts["merge_output_format"] == "mp4"
 
-    def test_todas_plataformas_incluyen_id(self):
-        for url in ("https://vimeo.com/123", "https://instagram.com/p/x",
-                    "https://tiktok.com/@u/video/1", "https://youtube.com/watch?v=x"):
-            for modo in ("audio", "video"):
-                opts = _construir_opciones_descarga(url, "/tmp/out", modo, "720p", False, False)
-                assert "%(id)s" in opts["outtmpl"]["default"], (url, modo)
-                assert "%(title)s.%(ext)s" not in opts["outtmpl"]["default"], (url, modo)
+    def test_no_youtube_outtmpl_sin_id(self):
+        opts = _construir_opciones_descarga(
+            "https://vimeo.com/123", "/tmp/out", "audio", "192", False, False
+        )
+        assert "%(id)s" not in opts["outtmpl"]
+        assert "%(title)s.%(ext)s" in opts["outtmpl"]
 
-    def test_subtitulos_solo_plataformas_compatible(self):
+    def test_subtitulos_solo_youtube(self):
         opts = _construir_opciones_descarga(
             "https://youtube.com/watch?v=x", "/tmp/out", "video", "720p", True, False
         )
@@ -200,44 +167,6 @@ class TestConstruirOpciones:
             "https://instagram.com/p/x", "/tmp/out", "video", "720p", True, False
         )
         assert opts_ig.get("writesubtitles") is None
-        assert not any(p.get("key") == "FFmpegEmbedSubtitle" for p in opts_ig.get("postprocessors", []))
-
-    def test_subtitulos_solo_en_modo_video(self):
-        opts = _construir_opciones_descarga(
-            "https://youtube.com/watch?v=x", "/tmp/out", "audio", "320", True, False
-        )
-        assert opts.get("writesubtitles") is None
-        assert not any(p.get("key") == "FFmpegEmbedSubtitle" for p in opts.get("postprocessors", []))
-
-    def test_subtitulos_embebidos_y_borra_archivos_tmp(self):
-        opts = _construir_opciones_descarga(
-            "https://youtube.com/watch?v=x", "/tmp/out", "video", "720p", True, False
-        )
-        embeds = [p for p in opts["postprocessors"] if p.get("key") == "FFmpegEmbedSubtitle"]
-        assert len(embeds) == 1
-        assert embeds[0]["already_have_subtitle"] is False
-
-    def test_subtitulos_automaticos_activados_por_defecto(self):
-        opts = _construir_opciones_descarga(
-            "https://youtube.com/watch?v=x", "/tmp/out", "video", "720p", True, False
-        )
-        assert opts.get("writeautomaticsub") is True
-        opts_off = _construir_opciones_descarga(
-            "https://youtube.com/watch?v=x", "/tmp/out", "video", "720p", True, False,
-            subtitulos_auto=False,
-        )
-        assert opts_off.get("writeautomaticsub") is None
-
-    def test_idioma_subtitulos_entra_como_patron(self):
-        opts = _construir_opciones_descarga(
-            "https://youtube.com/watch?v=x", "/tmp/out", "video", "720p", True, False,
-            idioma_subtitulos="en",
-        )
-        assert opts["subtitleslangs"] == [_patron_idioma("en")]
-        opts_auto = _construir_opciones_descarga(
-            "https://youtube.com/watch?v=x", "/tmp/out", "video", "720p", True, False
-        )
-        assert opts_auto["subtitleslangs"] == [_patron_idioma(c) for c in SUBTITULOS_AUTO_FALLBACK]
 
     def test_playlist_flag(self):
         opts = _construir_opciones_descarga(
@@ -376,34 +305,6 @@ class TestResolucionesYoutube4K:
         )
         assert "height<=2160" in opts["format"]
         assert "ext=mp4" not in opts["format"]
-
-
-class TestCompatibilidadCodecVlc:
-    """El video debe salir en H.264 (avc1): VLC no puede abrir AV1/VP9 en mp4."""
-
-    @pytest.mark.parametrize("res", ["360p", "480p", "720p", "1080p"])
-    def test_youtube_prefiere_h264(self, res):
-        fmt = RESOLUCIONES_YOUTUBE[res]
-        assert "[vcodec^=avc1]" in fmt
-        assert "[ext=mp4]" in fmt
-
-    @pytest.mark.parametrize("res", ["360p", "480p", "720p", "1080p"])
-    def test_youtube_conserva_respaldo(self, res):
-        limite = res.replace("p", "")
-        fmt = RESOLUCIONES_YOUTUBE[res]
-        assert (
-            f"bestvideo[height<={limite}][ext=mp4]+bestaudio[ext=m4a]/mp4" in fmt
-        )
-
-    @pytest.mark.parametrize("res", ["360p", "480p", "720p", "1080p"])
-    def test_generica_prefiere_h264(self, res):
-        assert "[vcodec^=avc1]" in RESOLUCIONES_GENERICAS[res]
-
-    def test_descarga_1080p_pide_h264(self):
-        opts = _construir_opciones_descarga(
-            "https://youtube.com/watch?v=x", "/tmp/o", "video", "1080p", False, False
-        )
-        assert "[vcodec^=avc1]" in opts["format"]
 
 
 class TestPostprocessorCallback:
@@ -681,305 +582,3 @@ class TestPreferenciasOcultarUrls:
         guardar_preferencias(prefs)
         loaded = cargar_preferencias()
         assert loaded["ocultar_urls"] is False
-
-
-class TestPreferenciasIdiomas:
-    def test_defaults_idiomas(self, monkeypatch, tmp_path):
-        import core as core_mod
-        cfg = tmp_path / "cfg"
-        monkeypatch.setattr(core_mod, "CONFIG_DIR", str(cfg))
-        monkeypatch.setattr(core_mod, "CONFIG_FILE", str(cfg / "config.json"))
-        loaded = cargar_preferencias()
-        assert loaded["idioma_audio"] == "auto"
-        assert loaded["idioma_subtitulos"] == "auto"
-        assert loaded["subtitulos_auto"] is True
-
-    def test_roundtrip_idiomas(self, monkeypatch, tmp_path):
-        import core as core_mod
-        cfg = tmp_path / "cfg"
-        monkeypatch.setattr(core_mod, "CONFIG_DIR", str(cfg))
-        monkeypatch.setattr(core_mod, "CONFIG_FILE", str(cfg / "config.json"))
-        guardar_preferencias({"idioma_audio": "en", "idioma_subtitulos": "es",
-                              "subtitulos_auto": False})
-        loaded = cargar_preferencias()
-        assert loaded["idioma_audio"] == "en"
-        assert loaded["idioma_subtitulos"] == "es"
-        assert loaded["subtitulos_auto"] is False
-
-
-class TestListasIdiomasUI:
-    def test_audio_tiene_auto_y_codigos(self):
-        assert "auto" in IDIOMAS_AUDIO
-        for codigo in ("es", "en", "pt", "fr", "de"):
-            assert codigo in IDIOMAS_AUDIO
-
-    def test_subtitulos_tiene_auto_y_codigos(self):
-        assert "auto" in IDIOMAS_SUBTITULOS
-        for codigo in ("es", "en", "pt"):
-            assert codigo in IDIOMAS_SUBTITULOS
-
-    def test_fallback_subtitulos_esta_en_listas(self):
-        assert SUBTITULOS_AUTO_FALLBACK == ["es", "en", "pt"]
-        for codigo in SUBTITULOS_AUTO_FALLBACK:
-            assert codigo in IDIOMAS_SUBTITULOS
-            assert codigo in IDIOMAS_CODIGOS
-
-    def test_codigos_sin_valores_vacios(self):
-        assert all(codigo and codigo.islower() for codigo in IDIOMAS_CODIGOS)
-        assert len(IDIOMAS_CODIGOS) == len(set(IDIOMAS_CODIGOS))
-
-
-class TestAplicarIdiomaSelector:
-    @pytest.mark.parametrize("idioma", ["", "auto", None])
-    def test_sin_idioma_no_altera_el_selector(self, idioma):
-        assert aplicar_idioma_a_selector("bestaudio/best", idioma) == "bestaudio/best"
-
-    def test_audio_con_idioma(self):
-        assert aplicar_idioma_a_selector("bestaudio/best", "es") == "bestaudio[language=es]/best"
-
-    def test_video_con_filtros_encadenados(self):
-        salida = aplicar_idioma_a_selector(RESOLUCIONES_YOUTUBE["1080p"], "es")
-        assert "bestaudio[ext=m4a][language=es]" in salida
-        assert "bestvideo[height<=1080][ext=mp4]" in salida
-
-    def test_4k_conserva_selectores_sin_ext_mp4(self):
-        salida = aplicar_idioma_a_selector(RESOLUCIONES_YOUTUBE["2160p"], "es")
-        assert "ext=mp4" not in salida
-        assert "bestaudio[language=es]" in salida
-
-    def test_generico_con_idioma(self):
-        salida = aplicar_idioma_a_selector(RESOLUCIONES_GENERICAS["1080p"], "en")
-        assert "bestaudio[ext=m4a][language=en]" in salida
-
-    def test_no_duplica_si_ya_tiene_idioma(self):
-        selector = "bestaudio[language=es]/best"
-        assert aplicar_idioma_a_selector(selector, "en") == selector
-
-    def test_agrega_falta_cuando_no_hay_sufijo(self):
-        assert aplicar_idioma_a_selector("bestaudio", "es") == "bestaudio[language=es]/best"
-
-    def test_idioma_invalido_deja_selector_resoluble_por_ytdlp(self):
-        salida = aplicar_idioma_a_selector("bestaudio/best", "zz")
-        assert salida == "bestaudio[language=zz]/best"
-
-
-class TestPatronIdioma:
-    def test_coincide_con_codigo_base_y_variantes_largas(self):
-        # yt-dlp aplica los patrones con re.I + fullmatch, así que los sufijos de
-        # 2 letras ("en-US" región vs "en-de" traducción) son indistinguibles:
-        # se conservan sufijos de 3+ letras (script/orig) y numéricos (ej. "es-419").
-        assert re.fullmatch(_patron_idioma("en"), "en", re.I)
-        assert re.fullmatch(_patron_idioma("en"), "EN", re.I)
-        assert re.fullmatch(_patron_idioma("en"), "en-orig", re.I)
-        assert re.fullmatch(_patron_idioma("zh"), "zh-Hans", re.I)
-        assert re.fullmatch(_patron_idioma("es"), "es-419", re.I)
-        assert not re.fullmatch(_patron_idioma("en"), "en-US")
-        assert not re.fullmatch(_patron_idioma("en"), "eng")
-        assert not re.fullmatch(_patron_idioma("en"), "fr")
-
-    def test_no_coincide_con_variantes_de_traduccion(self):
-        # Regresión: `en(-.*)?` capturaba todas las traducciones automáticas
-        # (`en-de`, `en-en`, ...) → ráfaga de peticiones → HTTP 429 → descarga abortada.
-        for variacion in ("en-de", "en-en", "en-fr", "en-ja", "de-en", "es-en"):
-            assert not re.fullmatch(_patron_idioma("en"), variacion, re.I), variacion
-            assert not re.fullmatch(_patron_idioma("es"), variacion, re.I), variacion
-
-    def test_no_descarga_traducciones_seleccionadas_por_ytdlp(self):
-        # Misma selección que hace yt-dlp (orderedSet_from_options, re.I + fullmatch)
-        # con un set realista: subs manuales en en+de generan traducciones xx-yy.
-        todos = (
-            "en", "en-orig", "en-de", "en-en", "en-fr",
-            "de", "de-en", "de-de", "es", "es-419", "pt", "pt-BR",
-        )
-        resultado = orderedSet_from_options(
-            _patrones_subtitulos("auto"), {"all": todos}, use_regex=True)
-        assert resultado == ["es", "es-419", "en", "en-orig", "pt"]
-        assert "en-de" not in resultado
-        assert "en-en" not in resultado
-        assert "de-en" not in resultado
-
-    def test_patrones_de_auto_no_vacios(self):
-        patrones = _patrones_subtitulos("auto")
-        assert patrones == [_patron_idioma(c) for c in SUBTITULOS_AUTO_FALLBACK]
-
-    def test_patrones_de_auto_fallan_sin_diferencia_con_ytdlp(self):
-        todos = ("es", "en", "en-US", "en-orig", "pt", "pt-BR", "fr", "de")
-        resultado = orderedSet_from_options(
-            _patrones_subtitulos("auto"), {"all": todos}, use_regex=True)
-        # "en-US"/"pt-BR" (2 letras) se excluyen a propósito: con re.I son
-        # indistinguibles de traducciones ("en-de") que disparaban HTTP 429.
-        assert resultado == ["es", "en", "en-orig", "pt"]
-
-    def test_patron_de_idioma_especifico_contra_ytdlp(self):
-        todos = ("en", "en-US", "es", "pt-BR", "en-orig")
-        assert orderedSet_from_options(
-            _patrones_subtitulos("es"), {"all": todos}, use_regex=True) == ["es"]
-        assert orderedSet_from_options(
-            _patrones_subtitulos("en"), {"all": todos}, use_regex=True) == ["en", "en-orig"]
-        assert orderedSet_from_options(
-            _patrones_subtitulos("pt"), {"all": todos}, use_regex=True) == []
-
-    def test_sin_idioma_usa_fallback(self):
-        assert _patrones_subtitulos("") == [_patron_idioma(c) for c in SUBTITULOS_AUTO_FALLBACK]
-
-
-class TestIdiomasInfo:
-    def test_audio_desde_formats_ignora_videopuro(self):
-        info = {"formats": [
-            {"vcodec": "none", "acodec": "opus", "language": "en"},
-            {"vcodec": "avc1", "acodec": "none", "language": "en"},
-            {"vcodec": "none", "acodec": "mp4a", "language": "es"},
-            {"vcodec": "none", "acodec": "mp4a", "language": "en"},
-            {"vcodec": "none", "acodec": "mp4a"},
-        ]}
-        assert listar_idiomas_audio(info) == ["en", "es"]
-
-    def test_audio_sin_formats(self):
-        assert listar_idiomas_audio(None) == []
-        assert listar_idiomas_audio("basura") == []
-        assert listar_idiomas_audio({"formats": None}) == []
-        assert listar_idiomas_audio({"formats": [None, {}]}) == []
-
-    def test_audio_en_playlist_no_consume_entradas(self):
-        generador = iter([{"formats": [{"language": "en"}]}])
-        info = {"_type": "playlist", "entries": generador}
-        assert listar_idiomas_audio(info) == []
-        assert next(generador)["formats"][0]["language"] == "en"
-
-    def test_subtitulos_desde_info(self):
-        info = {
-            "subtitles": {"es": [], "en": []},
-            "automatic_captions": {"es": [], "pt-BR": [], "en-US": []},
-        }
-        assert listar_idiomas_subtitulos(info) == ["es", "en", "pt-BR", "en-US"]
-
-    def test_subtitulos_sin_datos(self):
-        assert listar_idiomas_subtitulos(None) == []
-        assert listar_idiomas_subtitulos({}) == []
-        assert listar_idiomas_subtitulos({"subtitles": {}, "automatic_captions": {}}) == []
-
-
-def _sembrar_carpetas(carpeta):
-    carpeta = str(carpeta)
-    for nombre in ("cancion [id].mp3", "video [id].mp4"):
-        with open(os.path.join(carpeta, nombre), "wb") as f:
-            f.write(b"m")
-    for nombre in ("cancion [id].mp3.part",
-                   "cancion [id].ytdl",
-                   "video [id].mp4.part-Frag3",
-                   "video [id].mp4.part-Frag3.part",
-                   "video [id].temp.mp4",
-                   "video [id].orig.mp4",
-                   "clip [id].keyframes.temp",
-                   "notas.temp.pdf",
-                   "cancion [id].es.vtt",
-                   "suelta.vtt"):
-        with open(os.path.join(carpeta, nombre), "wb") as f:
-            f.write(b"t")
-    os.makedirs(os.path.join(carpeta, ".tmp-abc"))
-    with open(os.path.join(carpeta, ".tmp-abc", "parcial.mp4"), "wb") as f:
-        f.write(b"x")
-
-
-class TestLimpiezaRestos:
-    def test_listar_restos_encuentra_temporales(self, tmp_path):
-        _sembrar_carpetas(tmp_path)
-        hallazgo = listar_restos(str(tmp_path))
-        assert sorted(hallazgo["temporales"]) == [
-            ".tmp-abc",
-            "cancion [id].mp3.part",
-            "cancion [id].ytdl",
-            "clip [id].keyframes.temp",
-            "video [id].mp4.part-Frag3",
-            "video [id].mp4.part-Frag3.part",
-            "video [id].orig.mp4",
-            "video [id].temp.mp4",
-        ]
-
-    def test_listar_restos_no_meten_media_ni_vtt_sueltos(self, tmp_path):
-        _sembrar_carpetas(tmp_path)
-        hallazgo = listar_restos(str(tmp_path))
-        assert "cancion [id].mp3" not in hallazgo["temporales"]
-        assert "video [id].mp4" not in hallazgo["temporales"]
-        assert "notas.temp.pdf" not in hallazgo["temporales"]
-        assert "cancion [id].es.vtt" not in hallazgo["temporales"]
-        assert "suelta.vtt" not in hallazgo["temporales"]
-        assert hallazgo["subtitulos"] == ["cancion [id].es.vtt"]
-
-    def test_limpiar_restos_preserva_media_y_vtt(self, tmp_path):
-        _sembrar_carpetas(tmp_path)
-        borrados = limpiar_restos(str(tmp_path))
-        quedan = sorted(os.listdir(str(tmp_path)))
-        assert quedan == ["cancion [id].es.vtt", "cancion [id].mp3",
-                          "notas.temp.pdf", "suelta.vtt", "video [id].mp4"]
-        assert ".tmp-abc" in borrados
-        assert "cancion [id].mp3" not in borrados
-
-    def test_limpiar_restos_con_subtitulos(self, tmp_path):
-        _sembrar_carpetas(tmp_path)
-        limpiar_restos(str(tmp_path), incluir_subtitulos=True)
-        assert "cancion [id].es.vtt" not in os.listdir(str(tmp_path))
-        assert "suelta.vtt" in os.listdir(str(tmp_path))
-        assert "cancion [id].mp3" in os.listdir(str(tmp_path))
-
-    def test_listar_subtitulos_huerfanos(self, tmp_path):
-        _sembrar_carpetas(tmp_path)
-        assert listar_subtitulos_huerfanos(str(tmp_path)) == ["cancion [id].es.vtt"]
-
-    def test_listar_subtitulos_huerfanos_sin_carpeta(self, tmp_path):
-        assert listar_subtitulos_huerfanos(str(tmp_path / "no-existe")) == []
-        assert listar_restos(str(tmp_path / "no-existe")) == {"temporales": [], "subtitulos": []}
-
-    def test_vtt_junto_a_su_video_es_reportado(self, tmp_path):
-        with open(str(tmp_path / "video [id].mp4"), "wb") as f:
-            f.write(b"m")
-        with open(str(tmp_path / "video [id].en.vtt"), "wb") as f:
-            f.write(b"t")
-        with open(str(tmp_path / "video [id].mp3"), "wb") as f:
-            f.write(b"m")
-        assert listar_subtitulos_huerfanos(str(tmp_path)) == ["video [id].en.vtt"]
-
-
-class TestDescargaLimpiaTmpdir:
-    def _ejecutar(self, monkeypatch, tmp_path, cancelar=False):
-        import core as core_mod
-        capturas = []
-
-        class FakeYDL:
-            def __init__(self, opts):
-                capturas.append(opts)
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                return False
-
-            def download(self, urls):
-                assert len(urls) == 1
-                if cancelar:
-                    raise core_mod.DescargaCancelada()
-
-        monkeypatch.setattr(core_mod.yt_dlp, "YoutubeDL", FakeYDL)
-        resultado = descargar_musica(
-            "https://youtube.com/watch?v=x", str(tmp_path), "audio", "320")
-        return resultado, capturas
-
-    def test_tmpdir_se_elimina_tras_cancelar(self, monkeypatch, tmp_path):
-        resultado, capturas = self._ejecutar(monkeypatch, tmp_path, cancelar=True)
-        assert resultado == (False, "Descarga cancelada", "cancelada")
-        assert capturas[0]["outtmpl"]["temp"].startswith(str(tmp_path))
-        assert not [n for n in os.listdir(str(tmp_path)) if n.startswith(".tmp-")]
-
-    def test_tmpdir_se_elimina_tras_exito(self, monkeypatch, tmp_path):
-        resultado, capturas = self._ejecutar(monkeypatch, tmp_path)
-        assert resultado[0] is True
-        assert capturas[0]["outtmpl"]["temp"].startswith(str(tmp_path))
-        assert not [n for n in os.listdir(str(tmp_path)) if n.startswith(".tmp-")]
-
-    def test_destino_final_no_esta_en_tmpdir(self, monkeypatch, tmp_path):
-        resultado, capturas = self._ejecutar(monkeypatch, tmp_path)
-        assert resultado[0] is True
-        assert capturas[0]["outtmpl"]["default"].startswith(str(tmp_path) + os.sep)
-        assert capturas[0]["outtmpl"]["temp"] != capturas[0]["outtmpl"]["default"]
-
