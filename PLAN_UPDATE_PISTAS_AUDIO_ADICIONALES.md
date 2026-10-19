@@ -3,7 +3,7 @@
 **Proyecto:** YT-DownLoader del Jaeger  
 **Repositorio:** https://github.com/RafaelReyes0816/yt-dowloader-  
 **Base revisada:** v3.3.2  
-**Estado:** Fases 0–4 implementadas y verificadas (2026-10-19); Fase 5 hecha salvo release (commit local sin tag, por decisión del usuario).
+**Estado:** Fases 0–5 completadas; **v3.5.0 publicada** (2026-10-19).
 
 > Esta función no reactiva la línea v3.4.x revertida el 2026-10-18. No reutilizar ni re-aplicar cambios de esa línea desde el historial sin una petición explícita.
 
@@ -385,7 +385,7 @@ Las pistas se muestran con el mismo tratamiento de `ocultar_urls` y `enmascarar_
 - Ejecutar CI y revisar artefactos antes de publicar.
 - No declarar compatibilidad con todas las variantes de YouTube sin pruebas reales.
 
-**Estado (2026-10-19):** `README.md` y `MEMORY.md` actualizados; commit local en `feat/pistas-audio` **sin release** (decisión del usuario). `AGENTS.md` queda con cambios previos del usuario, fuera de este commit.
+**Estado (2026-10-19):** **release v3.5.0 publicada** (tag `v3.5.0`, commit `ffdfbfa`, CI run `39292324460` success, 6 assets). `README.md` incluye la sección de importación a reproductores; `MEMORY.md` actualizado. `AGENTS.md` queda con cambios previos del usuario, fuera de este release. Nota: se saltó de `3.3.2` a `3.5.0` porque los tags `v3.4.x` ya existen (línea revertida).
 
 ## 11. Pruebas
 
