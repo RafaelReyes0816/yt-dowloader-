@@ -49,6 +49,55 @@ python yt-dowloader.py
 - `ffmpeg` instalado y en PATH (requerido para conversión a mp3 y muxing de mp4).
 - Linux: `sudo apt install python3-tk` si tkinter no viene incluido.
 
+## Pistas de audio adicionales (solo YouTube)
+
+Algunos videos de YouTube traen varias pistas de audio (el audio original y uno o más doblajes). La app te deja descargarlas **por separado, sin tocar el video**.
+
+**Cómo descargarlas**
+
+1. Pega la URL del video de YouTube.
+2. Pulsa **Buscar pistas**. Aparece la lista de pistas disponibles (idioma y contenedor, p. ej. `Spanish`, `Portuguese`, `English (US)`).
+3. Marca las que quieras y pulsa **Agregar a la cola**. Cada pista se descarga como un item independiente (puedes cancelarla sola).
+
+**Dónde quedan los archivos**
+
+```
+Mi_musica/
+├── Título del video [ID].mp4        ← el video (audio original intacto)
+└── Título del video [ID]/
+    ├── audio adicional - Spanish.m4a
+    └── audio adicional - Portuguese.webm
+```
+
+**Cómo reproducirlas / importarlas en tu reproductor**
+
+| Contenedor | Qué es | Compatibilidad |
+|---|---|---|
+| `.m4a` | audio AAC | Universal: VLC, mpv, foobar2000, Windows Media Player, Reproductor de Windows, Música (macOS/iOS), Android, etc. |
+| `.webm` | audio Opus | VLC, mpv y foobar2000 (con Opus). Otros reproductores pueden no abrirlo. |
+
+- **VLC (todas las plataformas)**: `Medio → Abrir archivo…` y elige el archivo, o arrástralo sobre la ventana. Para ambos formatos a la vez: `Medio → Abrir carpeta…` sobre la subcarpeta `Título [ID]/`.
+- **Windows**: con `.m4a`, clic derecho → *Abrir con* → Reproductor de Windows / Windows Media Player, o *Agregar a la biblioteca*. El `.webm` normalmente necesita VLC.
+- **macOS**: doble clic en el `.m4a` (se abre en Música) o arrástralo a *Música* para importarlo a la biblioteca. El `.webm` ábrelo con VLC.
+- **Linux**: `vlc "audio adicional - Spanish.m4a"` o ábrelo desde el reproductor; los reproductores con GStreamer necesitan `gstreamer1.0-plugins-bad` para Opus.
+- **Android / iOS**: copia la carpeta al teléfono y ábrela con VLC; el `.m4a` también funciona en el reproductor del sistema.
+
+**Si tu reproductor no abre el `.webm` (Opus)**, conviértelo a `.m4a` (AAC) o `.mp3` con ffmpeg:
+
+```bash
+ffmpeg -i "audio adicional - Portuguese.webm" -c:a aac "audio adicional - Portuguese.m4a"
+ffmpeg -i "audio adicional - Portuguese.webm" -c:a libmp3lame -q:a 2 "audio adicional - Portuguese.mp3"
+```
+
+**Si quieres dejar una pista como audio fijo del video** (por ejemplo, para compartirlo con el doblaje ya incluido):
+
+```bash
+ffmpeg -i "Título del video [ID].mp4" -i "Título del video [ID]/audio adicional - Spanish.m4a" \
+  -map 0:v -map 1:a -c copy "Título del video [ID] (Spanish).mp4"
+```
+
+> La app no modifica el archivo de video original: las pistas extra se guardan aparte para que tú decidas qué hacer con ellas.
+
 ## Build standalone (ejecutable sin Python)
 
 ```bash
