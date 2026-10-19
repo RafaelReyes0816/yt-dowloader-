@@ -4,6 +4,7 @@ import json
 import sys
 import shutil
 import urllib.request
+from collections import Counter
 
 import yt_dlp
 
@@ -177,6 +178,7 @@ CALIDADES_VIDEO = list(RESOLUCIONES_YOUTUBE.keys())
 PLATAFORMAS_CONFIG = {
     "YouTube": {
         "soporta_subtitulos": True,
+        "soporta_pistas_audio": True,
         "outtmpl_unicidad": True,
         "calidades_audio": ["128", "192", "256", "320"],
     },
@@ -494,11 +496,177 @@ def verificar_url(url, navegador=None, cancel_flag=None):
         return resultado
 
 
-def _construir_opciones_descarga(url, carpeta, modo, calidad, subtitulos, playlist, progreso_callback=None, cancel_flag=None, postprocessor_callback=None):
+def _mismo_idioma(a, b):
+    if not a or not b:
+        return False
+    a, b = str(a), str(b)
+    if a.lower() == b.lower():
+        return True
+    a_es_base = "-" not in a
+    b_es_base = "-" not in b
+    if a_es_base and b.lower().startswith(a.lower() + "-"):
+        return True
+    if b_es_base and a.lower().startswith(b.lower() + "-"):
+        return True
+    return False
+
+
+def _pref_positiva(formato):
+    pref = formato.get("language_preference")
+    if pref is None:
+        return False
+    try:
+        return float(pref) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _es_formato_audio(formato):
+    if not formato.get("format_id"):
+        return False
+    acodec = formato.get("acodec")
+    if not acodec or acodec == "none":
+        return False
+    return formato.get("vcodec") in (None, "none")
+
+
+def es_audio_original(formato, info):
+    if not isinstance(formato, dict):
+        return False
+    if _pref_positiva(formato):
+        return True
+    language = formato.get("language")
+    info_language = (info or {}).get("language") if isinstance(info, dict) else None
+    return bool(language and info_language and _mismo_idioma(language, info_language))
+
+
+def nombre_pista_seguro(label):
+    texto = "" if label is None else str(label)
+    nombre = yt_dlp.utils.sanitize_filename(texto, restricted=False)
+    nombre = nombre.replace("%", "\uff05").strip().strip(".")
+    return nombre or "pista"
+
+
+def _etiqueta_pista(formato):
+    nota = (formato.get("format_note") or "").strip()
+    if nota:
+        etiqueta = nota.split(",")[0].strip()
+        sufijo = " - dubbed-auto"
+        if etiqueta.lower().endswith(sufijo):
+            etiqueta = etiqueta[:-len(sufijo)].strip()
+        if etiqueta and etiqueta.lower() not in ("low", "medium", "high"):
+            return etiqueta
+    if formato.get("language"):
+        return str(formato["language"])
+    return str(formato.get("format_id") or "pista")
+
+
+def _clave_orden_pista(formato):
+    ext = str(formato.get("ext") or "").lower()
+    preferencia = 0 if ext == "m4a" else 1
+    bitrate = formato.get("abr")
+    if bitrate is None:
+        bitrate = formato.get("tbr")
+    try:
+        bitrate = float(bitrate or 0)
+    except (TypeError, ValueError):
+        bitrate = 0.0
+    return (preferencia, -bitrate, str(formato.get("format_id") or ""))
+
+
+def normalizar_pistas_audio(info):
+    if not isinstance(info, dict):
+        return []
+    formatos = [
+        f for f in (info.get("formats") or [])
+        if isinstance(f, dict) and _es_formato_audio(f)
+    ]
+    if not formatos:
+        return []
+
+    hay_marca = any(_pref_positiva(f) for f in formatos)
+    if hay_marca:
+        originales = [
+            f.get("language") for f in formatos
+            if _pref_positiva(f) and f.get("language")
+        ]
+        if not originales:
+            return []
+    else:
+        idioma_info = info.get("language")
+        if not idioma_info:
+            return []
+        originales = [
+            f.get("language") for f in formatos
+            if f.get("language") and _mismo_idioma(f.get("language"), idioma_info)
+        ]
+        if not originales:
+            return []
+
+    originales_unicos = []
+    for language in originales:
+        if not any(_mismo_idioma(language, conocido) for conocido in originales_unicos):
+            originales_unicos.append(language)
+
+    grupos = {}
+    for formato in formatos:
+        language = formato.get("language")
+        if language and any(_mismo_idioma(language, original) for original in originales_unicos):
+            continue
+        if not language and not hay_marca:
+            continue
+        clave = str(language).casefold() if language else f"__{formato.get('format_id') or id(formato)}"
+        grupos.setdefault(clave, []).append(formato)
+
+    pistas = []
+    for candidatos in grupos.values():
+        formato = min(candidatos, key=_clave_orden_pista)
+        etiqueta = _etiqueta_pista(formato)
+        pistas.append({
+            "format_id": str(formato.get("format_id") or ""),
+            "language": formato.get("language"),
+            "label": etiqueta,
+            "ext": formato.get("ext"),
+            "acodec": formato.get("acodec"),
+            "abr": formato.get("abr"),
+            "audio_channels": formato.get("audio_channels"),
+            "nombre": nombre_pista_seguro(etiqueta),
+        })
+
+    pistas.sort(key=lambda p: (p["label"].casefold(), p["format_id"]))
+
+    conteo = Counter(p["nombre"].casefold() for p in pistas)
+    for pista in pistas:
+        if conteo[pista["nombre"].casefold()] > 1:
+            pista["nombre"] = nombre_pista_seguro(
+                f'{pista["nombre"]} [{pista["format_id"]}]')
+
+    usados = set()
+    for pista in pistas:
+        base = pista["nombre"]
+        nombre = base
+        indice = 2
+        while nombre.casefold() in usados:
+            nombre = f"{base} ({indice})"
+            indice += 1
+        pista["nombre"] = nombre
+        usados.add(nombre.casefold())
+
+    return pistas
+
+
+def _construir_opciones_descarga(url, carpeta, modo, calidad, subtitulos, playlist, progreso_callback=None, cancel_flag=None, postprocessor_callback=None, format_id=None, pista_label=None, tmpfile_callback=None):
     plataforma = detectar_plataforma(url)
     youtube = plataforma == "YouTube"
 
     def progress_hook(d):
+        if tmpfile_callback is not None and d.get("status") == "downloading":
+            ruta_tmp = d.get("tmpfilename") or d.get("filename")
+            if ruta_tmp:
+                try:
+                    tmpfile_callback(ruta_tmp)
+                except Exception:
+                    pass
         if cancel_flag is not None and cancel_flag.is_set():
             raise DescargaCancelada()
         if d["status"] == "downloading" and progreso_callback:
@@ -518,7 +686,12 @@ def _construir_opciones_descarga(url, carpeta, modo, calidad, subtitulos, playli
 
     ffmpeg_path = find_ffmpeg()
 
-    if youtube:
+    if format_id:
+        nombre = nombre_pista_seguro(pista_label or format_id)
+        outtmpl = os.path.join(
+            carpeta, "%(title)s [%(id)s]",
+            f"audio adicional - {nombre}.%(ext)s")
+    elif youtube:
         outtmpl = os.path.join(carpeta, "%(title)s [%(id)s].%(ext)s")
     else:
         outtmpl = os.path.join(carpeta, "%(title)s.%(ext)s")
@@ -534,9 +707,20 @@ def _construir_opciones_descarga(url, carpeta, modo, calidad, subtitulos, playli
     if ffmpeg_path:
         opciones["ffmpeg_location"] = ffmpeg_path
 
-    if youtube and subtitulos:
+    if youtube and subtitulos and not format_id:
         opciones["writesubtitles"] = True
         opciones["subtitleslangs"] = ["es", "en", "pt"]
+        opciones["outtmpl"] = {
+            "default": outtmpl,
+            "subtitle": os.path.join(
+                carpeta, "%(title)s [%(id)s]",
+                "%(title)s [%(id)s].%(ext)s"),
+        }
+
+    if format_id:
+        opciones["format"] = str(format_id)
+        opciones["noplaylist"] = True
+        return opciones
 
     if modo == "audio":
         if youtube:
@@ -569,7 +753,7 @@ def _construir_opciones_descarga(url, carpeta, modo, calidad, subtitulos, playli
     return opciones
 
 
-def descargar_musica(url, carpeta, modo, calidad, subtitulos=False, playlist=False, progress_callback=None, speed_callback=None, navegador=None, cancel_flag=None, ydl_holder=None, postprocessor_callback=None):
+def descargar_musica(url, carpeta, modo, calidad, subtitulos=False, playlist=False, progress_callback=None, speed_callback=None, navegador=None, cancel_flag=None, ydl_holder=None, postprocessor_callback=None, format_id=None, pista_label=None, tmpfile_callback=None):
     plataforma = detectar_plataforma(url)
     try:
         os.makedirs(carpeta, exist_ok=True)
@@ -586,6 +770,8 @@ def descargar_musica(url, carpeta, modo, calidad, subtitulos=False, playlist=Fal
             url, carpeta, modo, calidad, subtitulos, playlist,
             progreso_callback=progress_callback, cancel_flag=cancel_flag,
             postprocessor_callback=postprocessor_callback,
+            format_id=format_id, pista_label=pista_label,
+            tmpfile_callback=tmpfile_callback,
         )
         opciones.update(construir_opciones_cookies(navegador))
 

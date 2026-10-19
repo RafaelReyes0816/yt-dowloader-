@@ -21,6 +21,7 @@
 - **`pre_release_check.py` YA NO EXISTE** (se eliminó en el revert; fue añadido en v3.4.1). El pre-check E2E se hace con el script manual + pytest. Si se quiere volver a automatizar, recrearlo.
 - **Issues de GitHub**: #1 (VLC "incapaz de abrir el MRL", reportado con v3.4.2) y #2 (WMP no puede abrir mp3) — #1 quedará **cerrado con comentario** (resuelto en v3.3.2 con el fix avc1; si reaparece, reabrir). La línea v3.4.x queda **cerrada hasta encontrar la solución** a lo que motivó el revert.
 - **Fases 0–3 completadas** (seguridad → validación/privacy → UX/limpieza). Nada pendiente de implementar excepto los "open items" de seguridad (sección 6).
+- **Feature pistas de audio adicionales (YouTube)** — implementada y verificada en rama `feat/pistas-audio` (sin release, por decisión del usuario): `normalizar_pistas_audio` + `soporta_pistas_audio` en `core.py`, opciones con `format_id` (contenedor nativo, subcarpeta `Título [id]/`, `audio adicional - <etiqueta>.<ext>`), sección bajo demanda en la UI, items de cola `tipo="pista_audio"` con dedup, y limpieza dirigida de `.part` al cancelar (`tmpfile_callback` + `_limpiar_part_cancelado`, verificado E2E real). **Suite: 176 passed, 16 live deselected**; `py_compile` OK. Plan detallado en `PLAN_UPDATE_PISTAS_AUDIO_ADICIONALES.md`. Pendiente: revisión visual manual y probar cookies/sesión con pistas. `AGENTS.md` tiene cambios previos del usuario fuera de este commit.
 - `GITHUB_REPO = "RafaelReyes0816/yt-dowloader-"` en `core.py:10` (debe coincidir con el remoto o el auto-update del GITHUB_REPO no funciona).
 
 ## 2. Arquitectura (mapa mental rápido)
@@ -33,7 +34,7 @@
 ## 3. Comandos de verificación (siempre antes de commitear)
 
 ```bash
-.venv/bin/python -m pytest core_tests/test_core.py -m "not live" -q      # 146 passed
+.venv/bin/python -m pytest core_tests/test_core.py -m "not live" -q      # 176 passed
 .venv/bin/python -m py_compile yt-dowloader.py core.py theme.py          # OK
 .venv/bin/python -m pytest core_tests/test_plataformas_live.py -m live -v  # 16 passed (solo si hace falta, golpe a red real)
 ```

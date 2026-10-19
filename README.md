@@ -12,6 +12,7 @@ YouTube, Instagram, Facebook, TikTok, Twitch, Vimeo, Twitter/X y Reddit.
 
 - **Descarga audio** en formato mp3 (calidad seleccionable: 128–320 kbps).
 - **Descarga video** en formato mp4 (resoluciones YouTube: 360p hasta 2160p/4K; otras plataformas: calidad genérica).
+- **Pistas de audio adicionales** (YouTube): lista los audios extra (original y doblajes) y permite descargar cada uno por separado, en su contenedor nativo (`m4a`/`webm`), dentro de `Título [id]/audio adicional - <idioma>.<ext>`. El audio del video no se modifica.
 - **Cola de descargas** con soporte para múltiples archivos simultáneos, botón de cancelar por item y "Detener todo".
 - **Descarga paralela** opcional (1–3 descargas simultáneas, configurable en preferencias).
 - **Autenticación vía navegador**: si un video requiere sesión (privado, miembros, age-gated), la app puede usar cookies de Firefox/Chrome/Brave/Edge automáticamente sin almacenar credenciales.

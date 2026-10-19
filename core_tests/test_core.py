@@ -3,6 +3,7 @@ import threading
 
 import pytest
 
+import core
 from core import (
     PLATFORM_REGEX,
     detectar_plataforma,
@@ -22,6 +23,10 @@ from core import (
     enmascarar_url,
     sanitizar_detalle,
     sanear_texto_clipboard,
+    normalizar_pistas_audio,
+    nombre_pista_seguro,
+    es_audio_original,
+    descargar_musica,
 )
 from core import CALIDADES_AUDIO, CALIDADES_VIDEO
 
@@ -610,3 +615,337 @@ class TestPreferenciasOcultarUrls:
         guardar_preferencias(prefs)
         loaded = cargar_preferencias()
         assert loaded["ocultar_urls"] is False
+
+
+def _formato_audio(format_id, language=None, format_note=None, ext="m4a",
+                   abr=129.5, pref=-1, acodec="mp4a.40.2", vcodec="none", **extra):
+    formato = {
+        "format_id": format_id,
+        "language": language,
+        "format_note": format_note,
+        "ext": ext,
+        "abr": abr,
+        "tbr": abr,
+        "acodec": acodec,
+        "vcodec": vcodec,
+        "audio_channels": 2,
+        "language_preference": pref,
+    }
+    formato.update(extra)
+    return formato
+
+
+class TestNormalizarPistasAudio:
+    def test_excluye_original_y_deduplica_por_idioma(self):
+        info = {
+            "language": "en-US",
+            "formats": [
+                _formato_audio("139-7", "en-US", "English (US) original (default), low", abr=48.8, pref=10),
+                _formato_audio("140-7", "en-US", "English (US) original (default), medium", pref=10),
+                _formato_audio("251-7", "en-US", "English (US) original (default), medium", ext="webm", abr=136.1, pref=10),
+                _formato_audio("233-1", "es-US", "es-US - dubbed-auto", ext="mp4", abr=None),
+                _formato_audio("140-1", "es-US", "Spanish (US), medium"),
+                _formato_audio("251-2", "es-US", "Spanish (US), medium", ext="webm", abr=138.6),
+                _formato_audio("251-4", "de-DE", "German (DE), medium", ext="webm", abr=140.8),
+                _formato_audio("299", None, None, ext="mp4", abr=None,
+                               acodec="none", vcodec="avc1"),
+            ],
+        }
+        pistas = normalizar_pistas_audio(info)
+        assert [p["format_id"] for p in pistas] == ["251-4", "140-1"]
+        assert all(p["language"] != "en-US" for p in pistas)
+        assert pistas[1]["label"] == "Spanish (US)"
+        assert pistas[1]["ext"] == "m4a"
+        assert pistas[1]["acodec"] == "mp4a.40.2"
+
+    def test_video_de_un_solo_idioma_no_tiene_pistas(self):
+        info = {
+            "language": "en",
+            "formats": [
+                _formato_audio("139", "en", "English, low", abr=48.8),
+                _formato_audio("140", "en", "English, medium"),
+                _formato_audio("251", "en", "English, medium", ext="webm", abr=130.0),
+                _formato_audio("251-drc", "en", "medium, DRC", ext="webm", abr=130.1),
+            ],
+        }
+        assert normalizar_pistas_audio(info) == []
+
+    def test_original_por_language_si_no_hay_marca_de_preferencia(self):
+        info = {
+            "language": "en",
+            "formats": [
+                _formato_audio("140", "en", "English, medium"),
+                _formato_audio("140-1", "es", "Spanish, medium"),
+            ],
+        }
+        pistas = normalizar_pistas_audio(info)
+        assert [p["language"] for p in pistas] == ["es"]
+
+    def test_original_acepta_variante_base_del_idioma(self):
+        info = {
+            "language": "en",
+            "formats": [
+                _formato_audio("140", "en-US", "English (US), medium"),
+                _formato_audio("140-1", "es-US", "Spanish (US), medium"),
+            ],
+        }
+        pistas = normalizar_pistas_audio(info)
+        assert [p["language"] for p in pistas] == ["es-US"]
+
+    def test_variantes_regionales_no_se_consideran_el_mismo_idioma(self):
+        info = {
+            "language": "en-US",
+            "formats": [
+                _formato_audio("140", "en-GB", "English (GB), medium"),
+                _formato_audio("140-1", "en-US", "English (US) original (default), medium", pref=10),
+            ],
+        }
+        pistas = normalizar_pistas_audio(info)
+        assert [p["language"] for p in pistas] == ["en-GB"]
+
+    def test_sin_marca_y_varios_idiomas_es_ambiguo(self):
+        info = {
+            "formats": [
+                _formato_audio("140", "en", "English, medium"),
+                _formato_audio("140-1", "es", "Spanish, medium"),
+            ],
+        }
+        assert normalizar_pistas_audio(info) == []
+
+    def test_tolera_info_incompleta(self):
+        assert normalizar_pistas_audio({}) == []
+        assert normalizar_pistas_audio({"formats": None}) == []
+        assert normalizar_pistas_audio({"formats": [None, "x", 1]}) == []
+        assert normalizar_pistas_audio(None) == []
+
+    def test_etiiqueta_neutral_para_pistas_sin_idioma(self):
+        info = {
+            "language": "en",
+            "formats": [
+                _formato_audio("140", "en", "English, medium", pref=10),
+                _formato_audio("140-x", None, "Comentario", abr=100.0),
+                _formato_audio("140-y", None, None, abr=90.0),
+            ],
+        }
+        pistas = normalizar_pistas_audio(info)
+        assert [p["format_id"] for p in pistas] == ["140-y", "140-x"]
+        assert [p["label"] for p in pistas] == ["140-y", "Comentario"]
+
+    def test_prefiere_m4a_sobre_webm(self):
+        info = {
+            "language": "en",
+            "formats": [
+                _formato_audio("140", "en", "English, medium", pref=10),
+                _formato_audio("140-1", "es", "Spanish, medium", abr=129.5),
+                _formato_audio("251-1", "es", "Spanish, medium", ext="webm", abr=140.0),
+            ],
+        }
+        pistas = normalizar_pistas_audio(info)
+        assert pistas[0]["format_id"] == "140-1"
+        assert pistas[0]["ext"] == "m4a"
+
+    def test_sin_m4a_elige_el_mayor_bitrate(self):
+        info = {
+            "language": "en",
+            "formats": [
+                _formato_audio("140", "en", "English, medium", pref=10),
+                _formato_audio("249-1", "es", "Spanish, low", ext="webm", abr=50.0),
+                _formato_audio("251-1", "es", "Spanish, medium", ext="webm", abr=140.0),
+            ],
+        }
+        pistas = normalizar_pistas_audio(info)
+        assert pistas[0]["format_id"] == "251-1"
+
+    def test_nombres_unicos_cuando_las_etiquetas_coinciden(self):
+        info = {
+            "language": "en",
+            "formats": [
+                _formato_audio("140", "en", "English, medium", pref=10),
+                _formato_audio("140-1", "es-ES", "Spanish, medium"),
+                _formato_audio("140-2", "es-MX", "Spanish, medium"),
+            ],
+        }
+        pistas = normalizar_pistas_audio(info)
+        assert [p["label"] for p in pistas] == ["Spanish", "Spanish"]
+        nombres = [p["nombre"] for p in pistas]
+        assert len(set(nombres)) == 2
+        assert all("140-" in n for n in nombres)
+
+
+class TestNombrePistaSeguro:
+    def test_no_conserva_separadores_de_ruta(self):
+        nombre = nombre_pista_seguro("../../etc/passwd")
+        assert "/" not in nombre
+        assert "\\" not in nombre
+
+    def test_no_inyecta_campos_de_outtmpl(self):
+        nombre = nombre_pista_seguro("%(title)s")
+        assert "%" not in nombre
+
+    def test_conserva_espacios_y_parentesis(self):
+        assert nombre_pista_seguro("Spanish (US)") == "Spanish (US)"
+
+    def test_vacio_o_solo_puntos_devuelve_neutral(self):
+        assert nombre_pista_seguro("") == "pista"
+        assert nombre_pista_seguro("..") == "pista"
+        assert nombre_pista_seguro(None) == "pista"
+
+
+class TestEsAudioOriginal:
+    def test_marca_de_preferencia(self):
+        assert es_audio_original(
+            {"language": "en-US", "language_preference": 10}, {"language": "es"}) is True
+
+    def test_language_superior_con_variante(self):
+        assert es_audio_original(
+            {"language": "en-US", "language_preference": -1}, {"language": "en"}) is True
+
+    def test_doblaje_no_es_original(self):
+        assert es_audio_original(
+            {"language": "es-US", "language_preference": -1}, {"language": "en"}) is False
+
+    def test_variantes_regionales_distintas(self):
+        assert es_audio_original(
+            {"language": "en-GB", "language_preference": -1}, {"language": "en-US"}) is False
+
+
+class TestOpcionesPistaAudio:
+    def test_usa_format_id_sin_postprocesadores(self):
+        opts = _construir_opciones_descarga(
+            "https://youtube.com/watch?v=x", "/tmp/out", "audio", "128", False, False,
+            format_id="140-1", pista_label="Spanish (US)",
+        )
+        assert opts["format"] == "140-1"
+        assert "postprocessors" not in opts
+        assert "postprocessor_args" not in opts
+        assert "merge_output_format" not in opts
+        assert opts.get("writesubtitles") is None
+
+    def test_outtmpl_en_subcarpeta_con_nombre_seguro(self):
+        opts = _construir_opciones_descarga(
+            "https://youtube.com/watch?v=x", "/tmp/out", "audio", "128", False, False,
+            format_id="140-1", pista_label="Spanish (US)",
+        )
+        esperado = os.path.join(
+            "/tmp/out", "%(title)s [%(id)s]", "audio adicional - Spanish (US).%(ext)s")
+        assert opts["outtmpl"] == esperado
+        assert "%(language)s" not in opts["outtmpl"]
+
+    def test_etiqueta_peligrosa_se_sanea(self):
+        opts = _construir_opciones_descarga(
+            "https://youtube.com/watch?v=x", "/tmp/out", "audio", "128", False, False,
+            format_id="140-1", pista_label="../%(title)s",
+        )
+        directorio = os.path.join("/tmp/out", "%(title)s [%(id)s]") + os.sep
+        assert opts["outtmpl"].startswith(directorio)
+        nombre_archivo = opts["outtmpl"][len(directorio):]
+        assert "/" not in nombre_archivo
+        assert "\\" not in nombre_archivo
+        assert nombre_archivo.startswith("audio adicional - ")
+        assert "%(title)s" not in nombre_archivo
+        assert "%(id)s" not in nombre_archivo
+
+    def test_format_id_tiene_prioridad_sobre_modo_video(self):
+        opts = _construir_opciones_descarga(
+            "https://youtube.com/watch?v=x", "/tmp/out", "video", "1080p", False, False,
+            format_id="251-2", pista_label="Spanish",
+        )
+        assert opts["format"] == "251-2"
+        assert "merge_output_format" not in opts
+
+    def test_pista_siempre_es_noplaylist(self):
+        opts = _construir_opciones_descarga(
+            "https://youtube.com/watch?v=x&list=y", "/tmp/out", "audio", "128",
+            False, True, format_id="140-1", pista_label="Spanish",
+        )
+        assert opts["noplaylist"] is True
+
+    def test_pista_ignora_subtitulos(self):
+        opts = _construir_opciones_descarga(
+            "https://youtube.com/watch?v=x", "/tmp/out", "audio", "128", True, False,
+            format_id="140-1", pista_label="Spanish",
+        )
+        assert opts.get("writesubtitles") is None
+        assert isinstance(opts["outtmpl"], str)
+
+    def test_tmpfile_callback_recibe_la_ruta_parcial(self):
+        rutas = []
+        opts = _construir_opciones_descarga(
+            "https://youtube.com/watch?v=x", "/tmp/out", "audio", "128", False, False,
+            tmpfile_callback=rutas.append, format_id="140-1", pista_label="Spanish",
+        )
+        hook = opts["progress_hooks"][0]
+        hook({
+            "status": "downloading",
+            "tmpfilename": "/tmp/out/T [x]/audio adicional - Spanish.m4a.part",
+            "downloaded_bytes": 1,
+            "total_bytes": 2,
+        })
+        assert rutas == [
+            "/tmp/out/T [x]/audio adicional - Spanish.m4a.part"]
+
+
+class TestOuttmplSubtitulos:
+    def test_sin_subtitulos_sigue_siendo_cadena(self):
+        opts = _construir_opciones_descarga(
+            "https://youtube.com/watch?v=x", "/tmp/out", "video", "720p", False, False,
+        )
+        assert opts["outtmpl"] == os.path.join("/tmp/out", "%(title)s [%(id)s].%(ext)s")
+
+    def test_con_subtitulos_usa_diccionario(self):
+        opts = _construir_opciones_descarga(
+            "https://youtube.com/watch?v=x", "/tmp/out", "video", "720p", True, False,
+        )
+        assert opts["writesubtitles"] is True
+        assert isinstance(opts["outtmpl"], dict)
+        assert opts["outtmpl"]["default"] == os.path.join(
+            "/tmp/out", "%(title)s [%(id)s].%(ext)s")
+        assert opts["outtmpl"]["subtitle"] == os.path.join(
+            "/tmp/out", "%(title)s [%(id)s]", "%(title)s [%(id)s].%(ext)s")
+
+    def test_no_youtube_con_subtitulos_conserva_cadena(self):
+        opts = _construir_opciones_descarga(
+            "https://instagram.com/p/x", "/tmp/out", "video", "720p", True, False,
+        )
+        assert isinstance(opts["outtmpl"], str)
+        assert opts.get("writesubtitles") is None
+
+
+class TestDescargarPistaAudio:
+    def test_descargar_musica_reenvia_format_id_y_etiqueta(self, monkeypatch, tmp_path):
+        capturado = {}
+
+        def fake_construir(url, carpeta, modo, calidad, subtitulos, playlist,
+                           progreso_callback=None, cancel_flag=None,
+                           postprocessor_callback=None, format_id=None,
+                           pista_label=None, tmpfile_callback=None):
+            capturado["format_id"] = format_id
+            capturado["pista_label"] = pista_label
+            capturado["postprocessor_callback"] = postprocessor_callback
+            capturado["tmpfile_callback"] = tmpfile_callback
+            return {"outtmpl": "x"}
+
+        class FakeYDL:
+            def __init__(self, opciones):
+                self.opciones = opciones
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def download(self, urls):
+                capturado["urls"] = urls
+
+        monkeypatch.setattr(core, "_construir_opciones_descarga", fake_construir)
+        monkeypatch.setattr(core.yt_dlp, "YoutubeDL", FakeYDL)
+
+        ok, mensaje, tipo = descargar_musica(
+            "https://youtube.com/watch?v=x", str(tmp_path), "audio", "128",
+            format_id="140-1", pista_label="Spanish (US)",
+        )
+        assert ok is True
+        assert capturado["format_id"] == "140-1"
+        assert capturado["pista_label"] == "Spanish (US)"
+        assert capturado["postprocessor_callback"] is None
