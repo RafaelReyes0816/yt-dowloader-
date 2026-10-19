@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-__version__ = "3.5.0"
+__version__ = "3.6.0"
 
 import os
 import subprocess
@@ -26,7 +26,16 @@ from core import (
     guardar_preferencias,
     verificar_url,
     descargar_musica,
-    check_for_update,
+    obtener_release_latest,
+    seleccionar_asset_update,
+    descargar_asset,
+    verificar_sha256,
+    parsear_sha256sums,
+    comando_actualizacion,
+    detectar_so,
+    debe_revisar_update,
+    ASSET_SHA256,
+    UPDATE_DIR,
     obtener_ultima_version_ytdlp,
     comparar_versiones,
     elegir_navegador_sesion,
@@ -630,6 +639,20 @@ class VentanaDiagnostico(ctk.CTkToplevel):
         )
         self.btn_borrar_historial.pack(fill="x", padx=15, pady=(4, 0))
 
+        ctk.CTkButton(
+            frame, text="Buscar actualizaciones", height=32,
+            font=FONTS["small_bold"],
+            fg_color=COLORS["bg.base"], hover_color=COLORS["bg.surface-hover"],
+            border_color=COLORS["border.subtle"], border_width=1,
+            text_color=COLORS["text.primary"],
+            command=self._buscar_actualizaciones,
+        ).pack(fill="x", padx=15, pady=(4, 0))
+
+    def _buscar_actualizaciones(self):
+        master = self.master
+        if hasattr(master, "_buscar_update_manual"):
+            self._guard_after(200, master._buscar_update_manual)
+
     def _borrar_historial(self):
         master = self.master
         if hasattr(master, "historial"):
@@ -766,6 +789,303 @@ class VentanaDiagnostico(ctk.CTkToplevel):
                 f"Falló pip upgrade.\n\nDetalle técnico:\n{d}",
             ))
         self._guard_after(0, lambda: self.btn_actualizar_ytdlp.configure(state="normal"))
+
+
+class VentanaActualizacion(ctk.CTkToplevel):
+    def __init__(self, master, latest, release, auto=False):
+        super().__init__(master)
+        self.title("Actualización")
+        self.geometry("540x380")
+        self.minsize(480, 340)
+        self.resizable(False, False)
+        self.latest = latest
+        self.release = release or {}
+        self.auto = auto
+        self._cancel_flag = threading.Event()
+        self._descargando = False
+        self._build_ui()
+        self.transient(self.master)
+        self.protocol("WM_DELETE_WINDOW", self._cerrar)
+        self.after(120, self._encima)
+        if auto:
+            self.after(250, self._descargar_instalar)
+
+    def _encima(self):
+        try:
+            if not self.winfo_exists():
+                return
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+            self.attributes("-topmost", True)
+            self.after(300, self._quitar_topmost)
+        except Exception:
+            pass
+
+    def _quitar_topmost(self):
+        try:
+            if self.winfo_exists():
+                self.attributes("-topmost", False)
+        except Exception:
+            pass
+
+    def _build_ui(self):
+        frame = ctk.CTkFrame(self, fg_color=COLORS["bg.surface"], corner_radius=RADII["card"])
+        frame.pack(fill="both", expand=True, padx=15, pady=15)
+
+        ctk.CTkLabel(frame, text="Actualización disponible", font=FONTS["display"],
+                     text_color=COLORS["text.primary"]).pack(anchor="w", padx=15, pady=(15, 2))
+        ctk.CTkLabel(frame, text=f"v{self.latest} está disponible · tienes v{__version__}",
+                     font=FONTS["small"], text_color=COLORS["text.secondary"]).pack(anchor="w", padx=15)
+
+        self.detalle_label = ctk.CTkLabel(
+            frame, text="La app descargará el paquete de tu sistema, verificará su integridad "
+                       "y lo instalará. En Linux o Windows el sistema pedirá tu permiso.",
+            font=FONTS["small"], text_color=COLORS["text.secondary"],
+            justify="left", anchor="w", wraplength=480)
+        self.detalle_label.pack(anchor="w", padx=15, pady=(10, 8))
+
+        self.progress = ctk.CTkProgressBar(frame, height=10, corner_radius=5,
+                                           progress_color=COLORS["accent.progress"],
+                                           fg_color=COLORS["bg.base"])
+        self.progress.set(0)
+        self.progress.pack(fill="x", padx=15)
+
+        self.estado_label = ctk.CTkLabel(frame, text="", font=FONTS["small"],
+                                         text_color=COLORS["text.secondary"], anchor="w")
+        self.estado_label.pack(anchor="w", padx=15, pady=(6, 10))
+
+        botones = ctk.CTkFrame(frame, fg_color="transparent")
+        botones.pack(fill="x", padx=15, pady=(0, 15), side="bottom")
+
+        self.btn_instalar = ctk.CTkButton(
+            botones, text="Descargar e instalar", height=34, font=FONTS["small_bold"],
+            fg_color=COLORS["accent.progress"], hover_color="#E09A3E",
+            text_color="#1A1207", command=self._descargar_instalar)
+        self.btn_instalar.pack(side="left")
+
+        ctk.CTkButton(
+            botones, text="Abrir página", height=34, width=110, font=FONTS["small"],
+            fg_color="transparent", hover_color=COLORS["bg.surface-hover"],
+            border_color=COLORS["border.subtle"], border_width=1,
+            text_color=COLORS["text.secondary"], command=self._abrir_pagina).pack(side="left", padx=8)
+
+        self.btn_luego = ctk.CTkButton(
+            botones, text="Más tarde", height=34, width=100, font=FONTS["small"],
+            fg_color="transparent", hover_color=COLORS["bg.surface-hover"],
+            text_color=COLORS["text.secondary"], command=self._cerrar)
+        self.btn_luego.pack(side="right")
+
+    def _ui(self, fn):
+        try:
+            self.after(0, fn)
+        except Exception:
+            pass
+
+    def _set_estado(self, texto):
+        try:
+            self.estado_label.configure(text=texto)
+        except Exception:
+            pass
+
+    def _actualizar_progreso(self, descargado, total):
+        try:
+            if total:
+                self.progress.set(min(1.0, descargado / total))
+                self._set_estado(f"Descargando… {descargado / (1024 * 1024):.1f} / "
+                                 f"{total / (1024 * 1024):.1f} MB")
+            else:
+                self._set_estado(f"Descargando… {descargado / (1024 * 1024):.1f} MB")
+        except Exception:
+            pass
+
+    def _abrir_pagina(self):
+        url = self.release.get("url", "")
+        if url:
+            import webbrowser
+            webbrowser.open(url)
+
+    def _cerrar(self):
+        self._cancel_flag.set()
+        try:
+            self.destroy()
+        except Exception:
+            pass
+
+    def _descargar_instalar(self):
+        if self._descargando:
+            return
+        so = detectar_so()
+        asset = seleccionar_asset_update(self.release.get("assets"), so)
+        if not asset:
+            messagebox.showinfo(
+                "Sin paquete para tu sistema",
+                "Esta versión no incluye un paquete para tu sistema.\n"
+                "Se abrirá la página de descarga.")
+            self._abrir_pagina()
+            return
+        self._descargando = True
+        self.btn_instalar.configure(state="disabled")
+        self._set_estado("Preparando descarga…")
+        threading.Thread(target=self._hilo_descarga, args=(so, asset), daemon=True).start()
+
+    def _hilo_descarga(self, so, asset):
+        nombre = asset["name"]
+        destino = os.path.join(UPDATE_DIR, nombre)
+        esperado = ""
+        sums = None
+        for a in self.release.get("assets") or []:
+            if a.get("name") == ASSET_SHA256 and a.get("url"):
+                sums = a
+                break
+        if sums:
+            self._ui(lambda: self._set_estado("Verificando integridad…"))
+            ok_s, _msg_s, ruta_s = descargar_asset(sums["url"],
+                                                   os.path.join(UPDATE_DIR, ASSET_SHA256))
+            if ok_s:
+                try:
+                    with open(ruta_s, "r") as f:
+                        esperado = parsear_sha256sums(f.read()).get(nombre, "")
+                except OSError:
+                    esperado = ""
+        if sums and not esperado:
+            if not self._confirmar_sin_verificar():
+                self._ui(lambda: self._rehabilitar("No se verificó la integridad."))
+                return
+
+        def progreso(d, t):
+            self._ui(lambda: self._actualizar_progreso(d, t))
+
+        self._ui(lambda: self._set_estado("Descargando…"))
+        ok, msg, ruta = descargar_asset(asset["url"], destino,
+                                        progress_cb=progreso, cancel_flag=self._cancel_flag)
+        if not ok:
+            self._ui(lambda m=msg: self._rehabilitar(m))
+            return
+        if esperado and not verificar_sha256(ruta, esperado):
+            try:
+                os.remove(ruta)
+            except OSError:
+                pass
+            self._ui(lambda: self._rehabilitar(
+                "El archivo no pasó la verificación de integridad (SHA256). Se descartó."))
+            return
+        cmd = comando_actualizacion(ruta, so)
+        if not cmd:
+            self._ui(lambda: self._rehabilitar("No se pudo preparar la instalación."))
+            return
+        self._ui(lambda c=cmd: self._ejecutar(c, so, ruta))
+
+    def _confirmar_sin_verificar(self):
+        resultado = {"ok": False}
+        def preguntar():
+            resultado["ok"] = messagebox.askyesno(
+                "Sin verificación",
+                "No se pudo obtener la suma SHA256 de esta versión.\n\n"
+                "¿Deseas continuar sin verificar la integridad del archivo?")
+        self._ui(preguntar)
+        # esperar a que el usuario responda (solo hilo de descarga)
+        for _ in range(1200):
+            if self._cancel_flag.is_set():
+                return False
+            if resultado["ok"] or not self.winfo_exists():
+                break
+            time.sleep(0.1)
+        return resultado["ok"]
+
+    def _rehabilitar(self, mensaje):
+        self._descargando = False
+        self._set_estado(mensaje)
+        try:
+            self.progress.set(0)
+            self.btn_instalar.configure(state="normal")
+        except Exception:
+            pass
+
+    def _ejecutar(self, cmd, so, ruta):
+        self.progress.set(1.0)
+        self._set_estado("Descarga y verificación completadas.")
+        if not self.auto:
+            if not messagebox.askyesno("Instalar actualización",
+                                       f"{cmd['descripcion']}\n\n¿Continuar?"):
+                self._rehabilitar("Instalación cancelada.")
+                return
+        if so == "windows":
+            self._instalar_windows(cmd, ruta)
+        elif so == "macos":
+            self._instalar_macos(ruta)
+        else:
+            threading.Thread(target=self._instalar_linux, args=(cmd,), daemon=True).start()
+
+    def _instalar_windows(self, cmd, ruta):
+        try:
+            exe_nuevo = os.path.join(
+                os.environ.get("ProgramFiles", r"C:\Program Files"),
+                "YT-DownLoader", "yt-dowloader.exe")
+            if not os.path.isfile(exe_nuevo):
+                exe_nuevo = sys.executable
+            script = os.path.join(os.environ.get("TEMP", "."), "yt_dowloader_update.cmd")
+            with open(script, "w") as f:
+                f.write("@echo off\r\n")
+                f.write(f'start /wait "" "{ruta}" /S\r\n')
+                f.write(f'start "" "{exe_nuevo}"\r\n')
+                f.write('del "%~f0"\r\n')
+            subprocess.Popen(["cmd", "/c", script],
+                             creationflags=0x00000008 | 0x00000200, close_fds=True)
+            self._salir_para_actualizar()
+        except Exception as e:
+            self._rehabilitar(f"No se pudo lanzar el instalador: {e}")
+
+    def _instalar_macos(self, ruta):
+        try:
+            subprocess.Popen(["open", ruta])
+        except Exception as e:
+            self._rehabilitar(f"No se pudo abrir el .dmg: {e}")
+            return
+        messagebox.showinfo(
+            "Instalación en macOS",
+            "Se abrió el .dmg. Arrastra YT-DownLoader a Aplicaciones y reemplaza "
+            "la versión anterior.\n\nLa app se cerrará ahora.")
+        self._cerrar()
+        self._salir_para_actualizar()
+
+    def _instalar_linux(self, cmd):
+        try:
+            proc = subprocess.run(cmd["args"])
+        except Exception as e:
+            self._ui(lambda m=str(e): self._rehabilitar(f"No se pudo instalar: {m}"))
+            return
+        if proc.returncode == 0:
+            self._ui(self._instalado_ok)
+        else:
+            self._ui(lambda: self._rehabilitar(
+                "La instalación falló o fue cancelada. Puedes usar «Abrir página» como alternativa."))
+
+    def _instalado_ok(self):
+        self._set_estado("Instalada. Reiniciando…")
+        for w in (self.btn_instalar, self.btn_luego):
+            try:
+                w.configure(state="disabled")
+            except Exception:
+                pass
+        self.after(400, self._relanzar)
+
+    def _relanzar(self):
+        try:
+            if getattr(sys, "frozen", False):
+                subprocess.Popen([sys.executable])
+            else:
+                subprocess.Popen([sys.executable, os.path.abspath(__file__)])
+        except Exception:
+            pass
+        self._salir_para_actualizar()
+
+    def _salir_para_actualizar(self):
+        try:
+            self.master.destroy()
+        except Exception:
+            pass
+        os._exit(0)
 
 
 class App(ctk.CTk):
@@ -1213,6 +1533,15 @@ class App(ctk.CTk):
                                                      ["1", "2", "3"], width=60)
         self.paralelas_option.pack(side="left")
 
+        ctk.CTkLabel(row_toggles, text="Actualizar:", font=FONTS["small"],
+                     text_color=COLORS["text.secondary"]).pack(side="left", padx=(12, 6))
+        mapa_update = {"preguntar": "Preguntar", "auto": "Automático", "desactivado": "Desactivado"}
+        self.update_var = ctk.StringVar(
+            value=mapa_update.get(self.prefs.get("actualizar_automaticamente"), "Preguntar"))
+        self.update_option = self._crear_dropdown(
+            row_toggles, self.update_var, ["Preguntar", "Automático", "Desactivado"], width=110)
+        self.update_option.pack(side="left")
+
         row2 = ctk.CTkFrame(opt_frame, fg_color="transparent")
         row2.grid(row=2, column=0, sticky="ew", padx=15, pady=(0, 12))
         row2.grid_columnconfigure(1, weight=1)
@@ -1252,7 +1581,8 @@ class App(ctk.CTk):
 
         for var in (self.modo_var, self.calidad_var, self.carpeta_var, self.paralelas_var,
                     self.subtitulos_var, self.playlist_var, self.clipboard_var,
-                    self.usar_sesion_var, self.navegador_var, self.ocultar_urls_var):
+                    self.usar_sesion_var, self.navegador_var, self.ocultar_urls_var,
+                    self.update_var):
             var.trace_add("write", lambda *_: self._programar_guardado())
 
         self.modo_var.trace_add("write", lambda *_: self._actualizar_calidades())
@@ -1419,6 +1749,9 @@ class App(ctk.CTk):
         self.playlist_var.set(self.prefs.get("playlist", False))
         self.paralelas_var.set(str(self.prefs.get("max_paralelas", 1)))
         self.ocultar_urls_var.set(self._ocultar_urls)
+        self.update_var.set({
+            "preguntar": "Preguntar", "auto": "Automático", "desactivado": "Desactivado",
+        }.get(self.prefs.get("actualizar_automaticamente"), "Preguntar"))
         self._actualizar_calidades()
         self._actualizar_estado_navegador()
 
@@ -1434,6 +1767,9 @@ class App(ctk.CTk):
             "navegador": self._navegador_seleccionado(),
             "max_paralelas": int(self.paralelas_var.get()) if self.paralelas_var.get().isdigit() else 1,
             "ocultar_urls": self.ocultar_urls_var.get(),
+            "actualizar_automaticamente": {
+                "Preguntar": "preguntar", "Automático": "auto", "Desactivado": "desactivado",
+            }.get(self.update_var.get(), "preguntar"),
             "historial": self.historial[-100:],
         })
         guardar_preferencias(self.prefs)
@@ -2053,25 +2389,37 @@ class App(ctk.CTk):
         VentanaDiagnostico(self, url, navegador)
 
     # ---------- Update ----------
-    def _check_update_async(self):
+    def _check_update_async(self, forzar=False):
+        prefs = self.prefs
+        if not forzar and not debe_revisar_update(prefs):
+            return
+
         def run():
             try:
-                has_update, latest, url = check_for_update(__version__)
-                if has_update:
-                    self.after(0, lambda: self._show_update(latest, url))
+                release = obtener_release_latest()
+                if not release:
+                    return
+                self.prefs["ultima_revision_update"] = int(time.time())
+                guardar_preferencias(self.prefs)
+                latest = release.get("version", "")
+                if not latest or latest == __version__:
+                    if forzar:
+                        self.after(0, lambda: messagebox.showinfo(
+                            "Sin actualizaciones",
+                            f"Ya tienes la última versión (v{__version__})."))
+                    return
+                auto = self.prefs.get("actualizar_automaticamente") == "auto"
+                self.after(0, lambda: self._show_update(latest, release, auto))
             except Exception:
                 pass
         threading.Thread(target=run, daemon=True).start()
 
-    def _show_update(self, latest, url):
-        respuesta = messagebox.askyesno(
-            "Actualización disponible",
-            f"Hay una nueva versión: v{latest}\n\n"
-            "¿Deseas abrir la página de descarga?"
-        )
-        if respuesta and url:
-            import webbrowser
-            webbrowser.open(url)
+    def _buscar_update_manual(self):
+        messagebox.showinfo("Buscando", "Se está comprobando si hay una versión nueva…")
+        self._check_update_async(forzar=True)
+
+    def _show_update(self, latest, release, auto=False):
+        VentanaActualizacion(self, latest, release, auto=auto)
 
 
 def _formatear_velocidad(speed):

@@ -98,6 +98,25 @@ ffmpeg -i "Título del video [ID].mp4" -i "Título del video [ID]/audio adiciona
 
 > La app no modifica el archivo de video original: las pistas extra se guardan aparte para que tú decidas qué hacer con ellas.
 
+## Actualizaciones automáticas
+
+La app revisa las [Releases](https://github.com/RafaelReyes0816/yt-dowloader-/releases) una vez al día y, si hay una versión nueva, ofrece **descargarla e instalarla** sin salir del programa:
+
+1. Descarga el paquete de tu sistema y **verifica su integridad con SHA256** (contra el archivo `SHA256SUMS` del release). Si no coincide, lo descarta.
+2. Lanza la instalación y reinicia la app sola.
+
+Comportamiento por sistema:
+
+| Sistema | Instalación | Lo que verás |
+|---|---|---|
+| **Windows** | Ejecuta el instalador en silencio (`/S`) | Una confirmación de administrador (UAC) |
+| **Linux** | Instala el `.deb` con `pkexec` | Te pide tu contraseña de administrador |
+| **macOS** | Abre el `.dmg` | Arrastra la app a Aplicaciones (el binario no está firmado) |
+
+En **Opciones → Actualizar** puedes elegir `Preguntar` (por defecto), `Automático` (descarga e instala sin preguntar) o `Desactivado`. También hay un botón **Buscar actualizaciones** en la ventana de Diagnóstico.
+
+> Si instalaste la versión *portable* en Linux (`tar.gz`) en vez del `.deb`, la actualización instala el `.deb` en `/opt` (es el paquete oficial que la app verifica y ejecuta).
+
 ## Build standalone (ejecutable sin Python)
 
 ```bash
@@ -116,7 +135,7 @@ git tag v3.3.0
 git push origin v3.3.0
 ```
 
-Los ejecutables se publican en [Releases](https://github.com/RafaelReyes0816/yt-dowloader-/releases) vía `softprops/action-gh-release`.
+Los ejecutables se publican en [Releases](https://github.com/RafaelReyes0816/yt-dowloader-/releases) vía `softprops/action-gh-release`, junto con un archivo `SHA256SUMS` que usa el auto-update para verificar la integridad de las descargas.
 
 ## Arquitectura
 

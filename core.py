@@ -2,7 +2,10 @@ import os
 import re
 import json
 import sys
+import time
 import shutil
+import hashlib
+import platform
 import urllib.request
 from collections import Counter
 
@@ -11,6 +14,7 @@ import yt_dlp
 GITHUB_REPO = "RafaelReyes0816/yt-dowloader-"
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".yt-downloader")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+UPDATE_DIR = os.path.join(CONFIG_DIR, "updates")
 PLATFORM_REGEX = re.compile(
     r'(?:https?://)?(?:www\.)?(?:'
     r'youtube\.com|youtu\.be|'
@@ -403,6 +407,8 @@ def cargar_preferencias():
         "navegador": "",
         "max_paralelas": 1,
         "ocultar_urls": True,
+        "actualizar_automaticamente": "preguntar",
+        "ultima_revision_update": 0,
     }
     try:
         if os.path.isfile(CONFIG_FILE):
@@ -413,6 +419,8 @@ def cargar_preferencias():
     except Exception:
         pass
     defaults.pop("tema", None)
+    if defaults.get("actualizar_automaticamente") not in ("preguntar", "auto", "desactivado"):
+        defaults["actualizar_automaticamente"] = "preguntar"
     return defaults
 
 
@@ -814,17 +822,216 @@ def descargar_musica(url, carpeta, modo, calidad, subtitulos=False, playlist=Fal
 
 
 def check_for_update(current_version):
+    release = obtener_release_latest()
+    if not release:
+        return False, current_version, ""
+    latest = release.get("version", "")
+    if latest and latest != current_version:
+        return True, latest, release.get("url", "")
+    return False, current_version, ""
+
+
+ASSET_WINDOWS = "YT-DownLoader-Jaeger-Setup.exe"
+ASSET_MACOS = "yt-dowloader-macos.dmg"
+ASSET_LINUX_DEB = "yt-dowloader-linux.deb"
+ASSET_LINUX_TAR = "yt-dowloader-linux.tar.gz"
+ASSET_SHA256 = "SHA256SUMS"
+
+
+def detectar_so():
+    if sys.platform.startswith("win"):
+        return "windows"
+    if sys.platform == "darwin":
+        return "macos"
+    if sys.platform.startswith("linux"):
+        return "linux"
+    return "desconocido"
+
+
+def detectar_arch():
+    maquina = (platform.machine() or "").strip().lower()
+    if maquina in ("x86_64", "amd64"):
+        return "x86_64"
+    if maquina in ("arm64", "aarch64"):
+        return "arm64"
+    return maquina or "desconocida"
+
+
+def modo_ejecucion():
+    return "frozen" if getattr(sys, "frozen", False) else "fuente"
+
+
+def ruta_ejecutable():
+    if getattr(sys, "frozen", False):
+        objetivo = sys.executable
+    else:
+        objetivo = os.path.abspath(__file__)
+    return os.path.realpath(objetivo)
+
+
+def detectar_instalacion_linux(ruta_exe=None):
+    ruta = os.path.realpath(ruta_exe or ruta_ejecutable())
+    opt = os.path.realpath("/opt/yt-dowloader")
+    if ruta == opt or ruta.startswith(opt + os.sep):
+        return "deb"
+    return "portable"
+
+
+def obtener_release_latest():
     try:
         url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-        req = urllib.request.Request(url, headers={"Accept": "application/vnd.github.v3+json"})
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Accept": "application/vnd.github.v3+json",
+                "User-Agent": "yt-dowloader-updater",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
             data = json.loads(resp.read())
-            latest = data.get("tag_name", "").lstrip("v")
-            if latest and latest != current_version:
-                return True, latest, data.get("html_url", "")
-        return False, current_version, ""
+        assets = []
+        for a in data.get("assets") or []:
+            assets.append({
+                "name": a.get("name", ""),
+                "url": a.get("browser_download_url", ""),
+                "size": int(a.get("size") or 0),
+            })
+        return {
+            "version": (data.get("tag_name") or "").lstrip("v"),
+            "url": data.get("html_url", ""),
+            "assets": assets,
+        }
     except Exception:
-        return False, current_version, ""
+        return None
+
+
+def seleccionar_asset_update(assets, so=None):
+    so = so or detectar_so()
+    objetivo = {
+        "windows": ASSET_WINDOWS,
+        "macos": ASSET_MACOS,
+        "linux": ASSET_LINUX_DEB,
+    }.get(so)
+    if not objetivo:
+        return None
+    for a in assets or []:
+        if a.get("name") == objetivo and a.get("url"):
+            return a
+    return None
+
+
+def parsear_sha256sums(texto):
+    hashes = {}
+    for linea in (texto or "").splitlines():
+        linea = linea.strip()
+        if not linea:
+            continue
+        partes = linea.split()
+        if len(partes) < 2:
+            continue
+        digest = partes[0].strip().lower()
+        nombre = partes[-1].lstrip("*").strip()
+        if len(digest) == 64 and nombre:
+            hashes[nombre] = digest
+    return hashes
+
+
+def sha256_de_archivo(ruta, bloque=1024 * 256):
+    h = hashlib.sha256()
+    with open(ruta, "rb") as f:
+        while True:
+            datos = f.read(bloque)
+            if not datos:
+                break
+            h.update(datos)
+    return h.hexdigest()
+
+
+def verificar_sha256(ruta, esperado):
+    esperado = (esperado or "").strip().lower()
+    if not esperado or not os.path.isfile(ruta):
+        return False
+    try:
+        return sha256_de_archivo(ruta) == esperado
+    except OSError:
+        return False
+
+
+def descargar_asset(url, destino, progress_cb=None, cancel_flag=None):
+    parcial = destino + ".part"
+    try:
+        os.makedirs(os.path.dirname(destino) or ".", exist_ok=True)
+        req = urllib.request.Request(url, headers={"User-Agent": "yt-dowloader-updater"})
+        with urllib.request.urlopen(req, timeout=TIMEOUT_RED) as resp:
+            total = int(resp.headers.get("Content-Length") or 0)
+            descargado = 0
+            with open(parcial, "wb") as f:
+                while True:
+                    if cancel_flag is not None and cancel_flag.is_set():
+                        raise DescargaCancelada()
+                    bloque = resp.read(1024 * 256)
+                    if not bloque:
+                        break
+                    f.write(bloque)
+                    descargado += len(bloque)
+                    if progress_cb:
+                        progress_cb(descargado, total)
+        os.replace(parcial, destino)
+        return True, "", destino
+    except DescargaCancelada:
+        _borrar_silencioso(parcial)
+        return False, "Descarga cancelada", None
+    except Exception as e:
+        _borrar_silencioso(parcial)
+        return False, f"No se pudo descargar la actualización: {e}", None
+
+
+def _borrar_silencioso(ruta):
+    try:
+        if ruta and os.path.isfile(ruta):
+            os.remove(ruta)
+    except OSError:
+        pass
+
+
+def comando_actualizacion(ruta_asset, so=None):
+    so = so or detectar_so()
+    if so == "windows":
+        return {
+            "args": [ruta_asset, "/S"],
+            "requiere_privilegios": True,
+            "descripcion": "Se instalará en silencio (Windows pedirá permiso de administrador).",
+        }
+    if so == "macos":
+        return {
+            "args": ["open", ruta_asset],
+            "requiere_privilegios": False,
+            "descripcion": "Se abrirá el .dmg; arrastra la app a Aplicaciones para actualizar.",
+        }
+    if so == "linux":
+        if shutil.which("apt-get"):
+            args = ["pkexec", "apt-get", "install", "-y", ruta_asset]
+        else:
+            args = ["pkexec", "dpkg", "-i", ruta_asset]
+        return {
+            "args": args,
+            "requiere_privilegios": True,
+            "descripcion": "Linux pedirá tu contraseña para instalar el paquete.",
+        }
+    return None
+
+
+def debe_revisar_update(prefs, intervalo_horas=24, ahora=None):
+    if (prefs or {}).get("actualizar_automaticamente", "preguntar") == "desactivado":
+        return False
+    ahora = time.time() if ahora is None else ahora
+    ultima = 0
+    try:
+        ultima = float((prefs or {}).get("ultima_revision_update", 0) or 0)
+    except (TypeError, ValueError):
+        ultima = 0
+    return (ahora - ultima) >= intervalo_horas * 3600
+
 
 
 def obtener_ultima_version_ytdlp():

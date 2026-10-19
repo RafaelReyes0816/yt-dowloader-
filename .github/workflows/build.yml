@@ -196,8 +196,19 @@ jobs:
       - name: List artifacts
         run: find artifacts -type f
 
+      - name: Build SHA256SUMS
+        run: |
+          cd artifacts
+          find . -type f -exec sha256sum {} + \
+            | awk '{ n=$2; sub(/.*\//, "", n); print $1"  "n }' \
+            | sort -k2 > ../SHA256SUMS
+          cd ..
+          cat SHA256SUMS
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*
+          files: |
+            artifacts/**/*
+            SHA256SUMS
           generate_release_notes: true

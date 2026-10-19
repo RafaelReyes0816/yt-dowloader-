@@ -617,6 +617,38 @@ class TestPreferenciasOcultarUrls:
         assert loaded["ocultar_urls"] is False
 
 
+class TestPreferenciasActualizacion:
+    def test_default_preguntar(self, monkeypatch, tmp_path):
+        import core as core_mod
+        cfg = tmp_path / "cfg"
+        monkeypatch.setattr(core_mod, "CONFIG_DIR", str(cfg))
+        monkeypatch.setattr(core_mod, "CONFIG_FILE", str(cfg / "config.json"))
+        loaded = cargar_preferencias()
+        assert loaded["actualizar_automaticamente"] == "preguntar"
+        assert loaded["ultima_revision_update"] == 0
+
+    def test_roundtrip_conserva_valor(self, monkeypatch, tmp_path):
+        import core as core_mod
+        cfg = tmp_path / "cfg"
+        monkeypatch.setattr(core_mod, "CONFIG_DIR", str(cfg))
+        monkeypatch.setattr(core_mod, "CONFIG_FILE", str(cfg / "config.json"))
+        guardar_preferencias({"actualizar_automaticamente": "auto", "ultima_revision_update": 12345})
+        loaded = cargar_preferencias()
+        assert loaded["actualizar_automaticamente"] == "auto"
+        assert loaded["ultima_revision_update"] == 12345
+
+    def test_valor_invalido_se_normaliza(self, monkeypatch, tmp_path):
+        import core as core_mod
+        import json as json_mod
+        cfg = tmp_path / "cfg"
+        cfg.mkdir()
+        cfg_file = cfg / "config.json"
+        cfg_file.write_text(json_mod.dumps({"actualizar_automaticamente": "siempre"}))
+        monkeypatch.setattr(core_mod, "CONFIG_DIR", str(cfg))
+        monkeypatch.setattr(core_mod, "CONFIG_FILE", str(cfg_file))
+        assert cargar_preferencias()["actualizar_automaticamente"] == "preguntar"
+
+
 def _formato_audio(format_id, language=None, format_note=None, ext="m4a",
                    abr=129.5, pref=-1, acodec="mp4a.40.2", vcodec="none", **extra):
     formato = {
@@ -949,3 +981,177 @@ class TestDescargarPistaAudio:
         assert capturado["format_id"] == "140-1"
         assert capturado["pista_label"] == "Spanish (US)"
         assert capturado["postprocessor_callback"] is None
+
+
+class TestActualizacionAssets:
+    ASSETS = [
+        {"name": "yt-dowloader-linux.deb", "url": "https://x/deb", "size": 10},
+        {"name": "yt-dowloader-linux.tar.gz", "url": "https://x/tar", "size": 20},
+        {"name": "YT-DownLoader-Jaeger-Setup.exe", "url": "https://x/exe", "size": 30},
+        {"name": "yt-dowloader-macos.dmg", "url": "https://x/dmg", "size": 40},
+    ]
+
+    @pytest.mark.parametrize("so,esperado", [
+        ("windows", "YT-DownLoader-Jaeger-Setup.exe"),
+        ("macos", "yt-dowloader-macos.dmg"),
+        ("linux", "yt-dowloader-linux.deb"),
+    ])
+    def test_selecciona_asset_por_so(self, so, esperado):
+        assert core.seleccionar_asset_update(self.ASSETS, so)["name"] == esperado
+
+    def test_so_desconocido_o_sin_asset(self):
+        assert core.seleccionar_asset_update(self.ASSETS, "desconocido") is None
+        assert core.seleccionar_asset_update([{"name": "otro.zip", "url": "u"}], "linux") is None
+        assert core.seleccionar_asset_update([], "windows") is None
+
+    def test_asset_sin_url_no_se_elige(self):
+        assets = [{"name": "yt-dowloader-linux.deb", "url": ""}]
+        assert core.seleccionar_asset_update(assets, "linux") is None
+
+    def test_detectar_instalacion_linux(self, monkeypatch):
+        monkeypatch.setattr(core.os.path, "realpath", lambda p: p)
+        assert core.detectar_instalacion_linux("/opt/yt-dowloader/yt-dowloader") == "deb"
+        assert core.detectar_instalacion_linux("/home/u/dist/yt-dowloader/yt-dowloader") == "portable"
+
+
+class TestSha256Update:
+    def test_parsear_sha256sums(self):
+        texto = (
+            "a" * 64 + "  yt-dowloader-linux.deb\n"
+            + "b" * 64 + " *yt-dowloader-windows-portable.zip\n"
+            "linea-invalida\n"
+            "corta  archivo\n"
+        )
+        hashes = core.parsear_sha256sums(texto)
+        assert hashes == {
+            "yt-dowloader-linux.deb": "a" * 64,
+            "yt-dowloader-windows-portable.zip": "b" * 64,
+        }
+
+    def test_parsear_sha256sums_vacio(self):
+        assert core.parsear_sha256sums("") == {}
+        assert core.parsear_sha256sums(None) == {}
+
+    def test_verificar_sha256_ok_y_fallo(self, tmp_path):
+        archivo = tmp_path / "paquete.deb"
+        archivo.write_bytes(b"contenido de prueba")
+        real = core.sha256_de_archivo(str(archivo))
+        assert core.verificar_sha256(str(archivo), real) is True
+        assert core.verificar_sha256(str(archivo), real.upper()) is True
+        assert core.verificar_sha256(str(archivo), "0" * 64) is False
+
+    def test_verificar_sha256_sin_esperado_o_sin_archivo(self, tmp_path):
+        archivo = tmp_path / "x"
+        archivo.write_bytes(b"x")
+        assert core.verificar_sha256(str(archivo), "") is False
+        assert core.verificar_sha256(str(tmp_path / "no-existe"), "a" * 64) is False
+
+
+class TestComandoActualizacion:
+    def test_windows_silencioso(self):
+        cmd = core.comando_actualizacion("C:/tmp/setup.exe", "windows")
+        assert cmd["args"] == ["C:/tmp/setup.exe", "/S"]
+        assert cmd["requiere_privilegios"] is True
+
+    def test_macos_abre_dmg(self):
+        cmd = core.comando_actualizacion("/tmp/app.dmg", "macos")
+        assert cmd["args"] == ["open", "/tmp/app.dmg"]
+        assert cmd["requiere_privilegios"] is False
+
+    def test_linux_usa_pkexec(self):
+        cmd = core.comando_actualizacion("/tmp/pkg.deb", "linux")
+        assert cmd["args"][0] == "pkexec"
+        assert cmd["args"][-1] == "/tmp/pkg.deb"
+        assert cmd["requiere_privilegios"] is True
+
+    def test_so_desconocido(self):
+        assert core.comando_actualizacion("/tmp/x", "desconocido") is None
+
+
+class TestDebeRevisarUpdate:
+    def test_desactivado_no_revisa(self):
+        prefs = {"actualizar_automaticamente": "desactivado", "ultima_revision_update": 0}
+        assert core.debe_revisar_update(prefs, ahora=10_000_000) is False
+
+    def test_revisa_si_nunca_se_reviso(self):
+        assert core.debe_revisar_update({}, ahora=10_000_000) is True
+
+    def test_no_revisa_dentro_del_intervalo(self):
+        prefs = {"ultima_revision_update": 9_000_000}
+        assert core.debe_revisar_update(prefs, ahora=9_000_000 + 3600) is False
+
+    def test_revisa_pasado_el_intervalo(self):
+        prefs = {"ultima_revision_update": 9_000_000}
+        assert core.debe_revisar_update(prefs, ahora=9_000_000 + 25 * 3600) is True
+
+    def test_ultima_revision_invalida(self):
+        prefs = {"ultima_revision_update": "no-es-numero"}
+        assert core.debe_revisar_update(prefs, ahora=10_000_000) is True
+
+
+class TestDescargarAsset:
+    def test_descarga_y_renombra(self, tmp_path, monkeypatch):
+        class FakeResp:
+            headers = {"Content-Length": "9"}
+
+            def __init__(self):
+                self._datos = [b"12345", b"6789", b""]
+
+            def read(self, n):
+                return self._datos.pop(0)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        monkeypatch.setattr(core.urllib.request, "urlopen", lambda *a, **k: FakeResp())
+        progreso = []
+        destino = str(tmp_path / "pkg.deb")
+        ok, msg, ruta = core.descargar_asset(
+            "https://x/pkg.deb", destino, progress_cb=lambda d, t: progreso.append((d, t))
+        )
+        assert ok is True
+        assert ruta == destino
+        assert (tmp_path / "pkg.deb").read_bytes() == b"123456789"
+        assert not os.path.exists(destino + ".part")
+        assert progreso[-1] == (9, 9)
+
+    def test_cancelacion_borra_parcial(self, tmp_path, monkeypatch):
+        flag = threading.Event()
+
+        class FakeResp:
+            headers = {"Content-Length": "10"}
+
+            def read(self, n):
+                flag.set()
+                return b"12345"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        monkeypatch.setattr(core.urllib.request, "urlopen", lambda *a, **k: FakeResp())
+        destino = str(tmp_path / "pkg.deb")
+        ok, msg, ruta = core.descargar_asset("https://x/pkg.deb", destino, cancel_flag=flag)
+        assert ok is False
+        assert ruta is None
+        assert "cancelada" in msg.lower()
+        assert not os.path.exists(destino)
+        assert not os.path.exists(destino + ".part")
+
+    def test_error_de_red_borra_parcial(self, tmp_path, monkeypatch):
+        def fake_urlopen(*a, **k):
+            raise OSError("sin red")
+
+        monkeypatch.setattr(core.urllib.request, "urlopen", fake_urlopen)
+        destino = str(tmp_path / "pkg.deb")
+        ok, msg, ruta = core.descargar_asset("https://x/pkg.deb", destino)
+        assert ok is False
+        assert ruta is None
+        assert "no se pudo descargar" in msg.lower()
+        assert not os.path.exists(destino + ".part")
+
