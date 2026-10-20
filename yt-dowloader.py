@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-__version__ = "3.6.1"
+__version__ = "3.6.2"
 
 import os
 import subprocess
@@ -34,6 +34,8 @@ from core import (
     comando_actualizacion,
     detectar_so,
     debe_revisar_update,
+    debe_avisar,
+    detectar_instalacion_linux,
     ASSET_SHA256,
     UPDATE_DIR,
     obtener_ultima_version_ytdlp,
@@ -67,6 +69,27 @@ ESTADOS = {
     "error":        ("Error",           COLORS["accent.error"]),
     "cancelado":    ("Cancelado",       COLORS["text.secondary"]),
 }
+
+
+def _puede_autoinstalar():
+    """Indica si el entorno permite instalar la actualizacion sin intervencion manual.
+
+    macOS (.dmg) y las versiones portables (Linux tar.gz, Windows portable)
+    requieren que el usuario reemplace los archivos a mano.
+    """
+    so = detectar_so()
+    if so == "macos":
+        return False
+    if so == "linux":
+        return detectar_instalacion_linux() == "deb"
+    if so == "windows":
+        if not getattr(sys, "frozen", False):
+            return False
+        exe_nuevo = os.path.join(
+            os.environ.get("ProgramFiles", r"C:\Program Files"),
+            "YT-DownLoader", "yt-dowloader.exe")
+        return os.path.isfile(exe_nuevo)
+    return False
 
 
 def _detectar_motion_reducida():
@@ -799,7 +822,7 @@ class VentanaDiagnostico(ctk.CTkToplevel):
 
 
 class VentanaActualizacion(ctk.CTkToplevel):
-    def __init__(self, master, latest, release, auto=False):
+    def __init__(self, master, latest, release, auto=False, on_later=None, on_updated=None):
         super().__init__(master)
         self.title("Actualización")
         self.geometry("540x380")
@@ -808,6 +831,9 @@ class VentanaActualizacion(ctk.CTkToplevel):
         self.latest = latest
         self.release = release or {}
         self.auto = auto
+        self._autoinstalable = _puede_autoinstalar()
+        self._on_later = on_later
+        self._on_updated = on_updated
         self._cancel_flag = threading.Event()
         self._descargando = False
         self._build_ui()
@@ -845,9 +871,14 @@ class VentanaActualizacion(ctk.CTkToplevel):
         ctk.CTkLabel(frame, text=f"v{self.latest} está disponible · tienes v{__version__}",
                      font=FONTS["small"], text_color=COLORS["text.secondary"]).pack(anchor="w", padx=15)
 
+        if self._autoinstalable:
+            texto_detalle = ("La app descargará el paquete de tu sistema, verificará su integridad "
+                             "y lo instalará. En Linux o Windows el sistema pedirá tu permiso.")
+        else:
+            texto_detalle = ("Esta versión se instala manualmente en tu sistema. Abre la página de "
+                             "descarga para bajar el paquete y reemplazar la versión anterior.")
         self.detalle_label = ctk.CTkLabel(
-            frame, text="La app descargará el paquete de tu sistema, verificará su integridad "
-                       "y lo instalará. En Linux o Windows el sistema pedirá tu permiso.",
+            frame, text=texto_detalle,
             font=FONTS["small"], text_color=COLORS["text.secondary"],
             justify="left", anchor="w", wraplength=480)
         self.detalle_label.pack(anchor="w", padx=15, pady=(10, 8))
@@ -865,23 +896,24 @@ class VentanaActualizacion(ctk.CTkToplevel):
         botones = ctk.CTkFrame(frame, fg_color="transparent")
         botones.pack(fill="x", padx=15, pady=(0, 15), side="bottom")
 
-        self.btn_instalar = ctk.CTkButton(
-            botones, text="Descargar e instalar", height=34, font=FONTS["small_bold"],
-            fg_color=COLORS["accent.progress"], hover_color="#E09A3E",
-            text_color="#1A1207", command=self._descargar_instalar)
-        self.btn_instalar.pack(side="left")
+        if self._autoinstalable:
+            self.btn_instalar = ctk.CTkButton(
+                botones, text="Descargar e instalar", height=34, font=FONTS["small_bold"],
+                fg_color=COLORS["accent.progress"], hover_color="#E09A3E",
+                text_color="#1A1207", command=self._descargar_instalar)
+            self.btn_instalar.pack(side="left")
+        else:
+            self.btn_instalar = ctk.CTkButton(
+                botones, text="Abrir página de descarga", height=34, font=FONTS["small_bold"],
+                fg_color=COLORS["accent.progress"], hover_color="#E09A3E",
+                text_color="#1A1207", command=self._abrir_pagina)
+            self.btn_instalar.pack(side="left")
 
         ctk.CTkButton(
-            botones, text="Abrir página", height=34, width=110, font=FONTS["small"],
-            fg_color="transparent", hover_color=COLORS["bg.surface-hover"],
-            border_color=COLORS["border.subtle"], border_width=1,
-            text_color=COLORS["text.secondary"], command=self._abrir_pagina).pack(side="left", padx=8)
-
-        self.btn_luego = ctk.CTkButton(
             botones, text="Más tarde", height=34, width=100, font=FONTS["small"],
             fg_color="transparent", hover_color=COLORS["bg.surface-hover"],
-            text_color=COLORS["text.secondary"], command=self._cerrar)
-        self.btn_luego.pack(side="right")
+            border_color=COLORS["border.subtle"], border_width=1,
+            text_color=COLORS["text.secondary"], command=self._cerrar).pack(side="right")
 
     def _ui(self, fn):
         try:
@@ -914,6 +946,11 @@ class VentanaActualizacion(ctk.CTkToplevel):
 
     def _cerrar(self):
         self._cancel_flag.set()
+        if callable(self._on_later):
+            try:
+                self._on_later(self.latest)
+            except Exception:
+                pass
         try:
             self.destroy()
         except Exception:
@@ -1070,11 +1107,15 @@ class VentanaActualizacion(ctk.CTkToplevel):
 
     def _instalado_ok(self):
         self._set_estado("Instalada. Reiniciando…")
-        for w in (self.btn_instalar, self.btn_luego):
+        if callable(self._on_updated):
             try:
-                w.configure(state="disabled")
+                self._on_updated(self.latest)
             except Exception:
                 pass
+        try:
+            self.btn_instalar.configure(state="disabled")
+        except Exception:
+            pass
         self.after(400, self._relanzar)
 
     def _relanzar(self):
@@ -1128,6 +1169,8 @@ class App(ctk.CTk):
         self._pistas_vars = []
         self._pistas_cancel_evt = None
         self._pistas_cargando = False
+        self._latest_pendiente = ""
+        self._release_pendiente = None
 
         self._build_ui()
         self._aplicar_preferencias()
@@ -1203,6 +1246,31 @@ class App(ctk.CTk):
 
         ctk.CTkLabel(header_right, text=f"v{__version__}",
                      font=FONTS["small"], text_color=COLORS["text.secondary"]).pack(side="right", padx=(0, 8))
+
+        self.update_badge = ctk.CTkButton(
+            header_right, text="", height=28, width=10, corner_radius=999,
+            font=FONTS["small_bold"], fg_color=COLORS["accent.progress"],
+            hover_color="#E09A3E", text_color="#1A1207",
+            command=self._abrir_update_desde_banner)
+
+    def _mostrar_banner_update(self, latest):
+        try:
+            self.update_badge.configure(text=f"  ● Actualización v{latest}  ")
+            self.update_badge.pack(side="right", padx=(8, 0))
+        except Exception:
+            pass
+
+    def _ocultar_banner_update(self):
+        try:
+            self.update_badge.pack_forget()
+        except Exception:
+            pass
+
+    def _abrir_update_desde_banner(self):
+        release = getattr(self, "_release_pendiente", None)
+        latest = getattr(self, "_latest_pendiente", "")
+        if release and latest:
+            self._show_update(latest, release, auto=False)
 
     # ---------- Input ----------
     def _build_input(self):
@@ -2417,8 +2485,13 @@ class App(ctk.CTk):
                             "Sin actualizaciones",
                             f"Ya tienes la última versión (v{__version__})."))
                     return
+                self._latest_pendiente = latest
+                self._release_pendiente = release
+                self.after(0, lambda l=latest: self._mostrar_banner_update(l))
+                if not forzar and not debe_avisar(latest, self.prefs):
+                    return
                 auto = self.prefs.get("actualizar_automaticamente") == "auto"
-                self.after(0, lambda: self._show_update(latest, release, auto))
+                self.after(0, lambda l=latest, r=release, a=auto: self._show_update(l, r, a))
             except Exception:
                 pass
         threading.Thread(target=run, daemon=True).start()
@@ -2427,8 +2500,15 @@ class App(ctk.CTk):
         messagebox.showinfo("Buscando", "Se está comprobando si hay una versión nueva…")
         self._check_update_async(forzar=True)
 
+    def _marcar_version_avisada(self, latest):
+        self.prefs["version_avisada"] = latest
+        guardar_preferencias(self.prefs)
+
     def _show_update(self, latest, release, auto=False):
-        VentanaActualizacion(self, latest, release, auto=auto)
+        VentanaActualizacion(
+            self, latest, release, auto=auto,
+            on_later=self._marcar_version_avisada,
+            on_updated=lambda l: self.after(0, self._ocultar_banner_update))
 
 
 def _formatear_velocidad(speed):

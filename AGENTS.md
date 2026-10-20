@@ -27,7 +27,7 @@ System deps: `ffmpeg` on PATH (mp3 conversion + mp4 muxing). Debian/Ubuntu: `sud
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest                # offline suite: 216 passed, 16 live deselected (v3.6.1)
+.venv/bin/python -m pytest                # offline suite: 220 passed, 16 live deselected (v3.6.2)
 .venv/bin/python -m pytest core_tests/test_core.py -k <nombre> -q   # single test
 .venv/bin/python -m py_compile yt-dowloader.py core.py theme.py     # syntax check (run before committing)
 ```

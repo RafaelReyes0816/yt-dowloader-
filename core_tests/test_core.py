@@ -742,6 +742,7 @@ class TestPreferenciasActualizacion:
         loaded = cargar_preferencias()
         assert loaded["actualizar_automaticamente"] == "preguntar"
         assert loaded["ultima_revision_update"] == 0
+        assert loaded["version_avisada"] == ""
 
     def test_roundtrip_conserva_valor(self, monkeypatch, tmp_path):
         import core as core_mod
@@ -1187,22 +1188,38 @@ class TestComandoActualizacion:
 class TestDebeRevisarUpdate:
     def test_desactivado_no_revisa(self):
         prefs = {"actualizar_automaticamente": "desactivado", "ultima_revision_update": 0}
-        assert core.debe_revisar_update(prefs, ahora=10_000_000) is False
+        assert core.debe_revisar_update(prefs) is False
 
-    def test_revisa_si_nunca_se_reviso(self):
-        assert core.debe_revisar_update({}, ahora=10_000_000) is True
+    def test_revisa_por_defecto(self):
+        assert core.debe_revisar_update({}) is True
 
-    def test_no_revisa_dentro_del_intervalo(self):
+    def test_revisa_ignora_historial_de_horas(self):
         prefs = {"ultima_revision_update": 9_000_000}
-        assert core.debe_revisar_update(prefs, ahora=9_000_000 + 3600) is False
+        assert core.debe_revisar_update(prefs) is True
 
-    def test_revisa_pasado_el_intervalo(self):
-        prefs = {"ultima_revision_update": 9_000_000}
-        assert core.debe_revisar_update(prefs, ahora=9_000_000 + 25 * 3600) is True
+    def test_revisa_aunque_avisado(self):
+        prefs = {"version_avisada": "3.6.2", "actualizar_automaticamente": "preguntar"}
+        assert core.debe_revisar_update(prefs) is True
 
-    def test_ultima_revision_invalida(self):
-        prefs = {"ultima_revision_update": "no-es-numero"}
-        assert core.debe_revisar_update(prefs, ahora=10_000_000) is True
+    def test_modo_auto_revisa(self):
+        prefs = {"actualizar_automaticamente": "auto"}
+        assert core.debe_revisar_update(prefs) is True
+
+
+class TestDebeAvisar:
+    def test_avisa_version_nueva(self):
+        assert core.debe_avisar("3.6.2", {}) is True
+
+    def test_no_avisa_si_ya_se_aviso_esa_version(self):
+        prefs = {"version_avisada": "3.6.2"}
+        assert core.debe_avisar("3.6.2", prefs) is False
+
+    def test_avisa_si_cambia_la_version(self):
+        prefs = {"version_avisada": "3.6.2"}
+        assert core.debe_avisar("3.6.3", prefs) is True
+
+    def test_sin_version_no_avisa(self):
+        assert core.debe_avisar("", {}) is False
 
 
 class TestDescargarAsset:

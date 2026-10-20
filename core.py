@@ -2,7 +2,6 @@ import os
 import re
 import json
 import sys
-import time
 import shutil
 import hashlib
 import platform
@@ -451,6 +450,7 @@ def cargar_preferencias():
         "ocultar_urls": True,
         "actualizar_automaticamente": "preguntar",
         "ultima_revision_update": 0,
+        "version_avisada": "",
     }
     try:
         if os.path.isfile(CONFIG_FILE):
@@ -1165,15 +1165,26 @@ def comando_actualizacion(ruta_asset, so=None):
 
 
 def debe_revisar_update(prefs, intervalo_horas=24, ahora=None):
+    """Indica si conviene comprobar si hay una version nueva.
+
+    Ya NO usa un rate-limit por horas: revisa en cada arranque, salvo que la
+    actualizacion automatica este desactivada. Los parametros ``intervalo_horas``
+    y ``ahora`` se conservan por compatibilidad y no afectan a la decision.
+    """
     if (prefs or {}).get("actualizar_automaticamente", "preguntar") == "desactivado":
         return False
-    ahora = time.time() if ahora is None else ahora
-    ultima = 0
-    try:
-        ultima = float((prefs or {}).get("ultima_revision_update", 0) or 0)
-    except (TypeError, ValueError):
-        ultima = 0
-    return (ahora - ultima) >= intervalo_horas * 3600
+    return True
+
+
+def debe_avisar(version_latest, prefs):
+    """Indica si hay que avisar de ``version_latest``.
+
+    Devuelve False si esa misma version ya se avisó (el usuario eligio
+    'Mas tarde'), para no repetir la ventana en cada arranque.
+    """
+    if not version_latest:
+        return False
+    return (prefs or {}).get("version_avisada", "") != version_latest
 
 
 
