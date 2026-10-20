@@ -1,0 +1,26 @@
+name: Diagnostico Cookies (Windows)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnostico:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: Build diagnostico
+        run: pyinstaller --onefile --name diagnostico_cookies --hidden-import curl_cffi --hidden-import curl_cffi.requests core_tests/diagnostico_cookies.py
+
+      - name: Upload diagnostico
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostico_cookies-windows
+          path: dist/diagnostico_cookies.exe
