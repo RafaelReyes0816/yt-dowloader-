@@ -32,6 +32,7 @@ from core import CALIDADES_AUDIO, CALIDADES_VIDEO
 from core import (
     detectar_navegadores,
     elegir_navegador_sesion,
+    navegadores_para_reintento,
     ORDEN_NAVEGADORES,
     CLIENTES_FALLBACK_BOT,
 )
@@ -132,6 +133,21 @@ class TestClasificadorErrores:
         res = ClasificadorErrores.clasificar_availability("private", "YouTube")
         assert res is not None and res["tipo"] == "private"
         assert ClasificadorErrores.clasificar_availability("public", "YouTube") is None
+
+    @pytest.mark.parametrize("mensaje", [
+        "ERROR: Could not copy Chrome cookie database. See https://github.com/yt-dlp/yt-dlp/issues/7271",
+        "ERROR: Could not copy Edge cookie database.",
+        "ERROR: Could not copy Brave cookie database.",
+        "ERROR: could not copy firefox cookie database",
+    ])
+    def test_cookies_bloqueadas_por_navegador_abierto(self, mensaje):
+        import yt_dlp
+        res = ClasificadorErrores.clasificar(yt_dlp.utils.DownloadError(mensaje), "YouTube")
+        assert res["tipo"] == "cookies"
+
+    def test_sugerencia_cookies_menciona_cerrar_navegador(self):
+        sugerencia = ClasificadorErrores.SUGERENCIAS.get("cookies", "").lower()
+        assert "cierra" in sugerencia
 
 
 class TestCompararVersiones:
@@ -301,6 +317,25 @@ class TestElegirNavegadorSesion:
     def test_orden_preferido_brave_primero(self):
         assert ORDEN_NAVEGADORES[0] == "brave"
         assert ORDEN_NAVEGADORES.index("brave") < ORDEN_NAVEGADORES.index("edge")
+
+
+class TestNavegadoresParaReintento:
+    def test_devuelve_todos_los_detectados(self):
+        assert navegadores_para_reintento("", ["brave", "firefox", "edge"]) == ["brave", "firefox", "edge"]
+
+    def test_pref_va_primero(self):
+        assert navegadores_para_reintento("edge", ["brave", "firefox", "edge"]) == [
+            "edge", "brave", "firefox"]
+
+    def test_pref_ausente_no_se_agrega(self):
+        assert navegadores_para_reintento("chrome", ["brave", "firefox"]) == ["brave", "firefox"]
+
+    def test_sin_detectados_devuelve_vacio(self):
+        assert navegadores_para_reintento("brave", []) == []
+
+    def test_usa_deteccion_por_defecto(self, monkeypatch):
+        monkeypatch.setattr(core, "detectar_navegadores", lambda: ["firefox", "brave"])
+        assert navegadores_para_reintento() == ["firefox", "brave"]
 
 
 class TestFallbackBot:

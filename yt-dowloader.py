@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-__version__ = "3.7.0"
+__version__ = "3.7.1"
 
 import os
 import subprocess
@@ -41,6 +41,7 @@ from core import (
     obtener_ultima_version_ytdlp,
     comparar_versiones,
     elegir_navegador_sesion,
+    navegadores_para_reintento,
     extraer_url_completa,
     enmascarar_url,
     sanitizar_detalle,
@@ -757,12 +758,19 @@ class VentanaDiagnostico(ctk.CTkToplevel):
 
         resultado = verificar_url(self.url, self.navegador)
         restriccion = resultado.get("restriccion")
-        if restriccion and restriccion.get("tipo") in TIPOS_REINTENTO_SESION and not self.navegador:
-            nav = self.navegador_pref
-            if nav:
+        if restriccion and restriccion.get("tipo") in TIPOS_REINTENTO_SESION and (
+                not self.navegador or restriccion.get("tipo") == "cookies"):
+            candidatos = navegadores_para_reintento(self.navegador_pref, navegadores)
+            if self.navegador:
+                candidatos = [n for n in candidatos if n != self.navegador]
+            for nav in candidatos:
                 self._set("acceso", f"Reintentando con {nav.capitalize()}…", COLORS["accent.progress"])
                 resultado = verificar_url(self.url, nav)
                 restriccion = resultado.get("restriccion")
+                if not restriccion or restriccion.get("tipo") not in TIPOS_REINTENTO_SESION:
+                    break
+                if restriccion.get("tipo") != "cookies":
+                    break
         if restriccion:
             self._set("acceso", "RESTRINGIDO · " + restriccion["tipo"], COLORS["accent.error"])
             texto = restriccion["mensaje"]
@@ -2523,9 +2531,14 @@ class App(ctk.CTk):
             self.annunciador.notify("info", "Descarga cancelada")
             return
 
-        if not exito and tipo_fallo in TIPOS_REINTENTO_SESION and not navegador_actual:
-            nav = self._elegir_navegador_sesion()
-            if nav:
+        if not exito and tipo_fallo in TIPOS_REINTENTO_SESION and (
+                not navegador_actual or tipo_fallo == "cookies"):
+            candidatos = navegadores_para_reintento(self._navegador_preferido(), self.navegadores)
+            if navegador_actual:
+                candidatos = [n for n in candidatos if n != navegador_actual]
+            for nav in candidatos:
+                if item["cancel_flag"].is_set():
+                    return
                 self._set_estado(item, "verificando")
                 self._log(f"Reintentando con sesión de {nav.capitalize()}: {self._titulo_item(item)}")
                 self.annunciador.notify("working", f"Reintento con {nav.capitalize()}")
@@ -2553,6 +2566,8 @@ class App(ctk.CTk):
                     self._log(f"Cancelado: {self._titulo_item(item)}")
                     self.annunciador.notify("info", "Descarga cancelada")
                     return
+                if exito or tipo_fallo != "cookies":
+                    break
 
         if exito:
             self._set_estado(item, "listo")

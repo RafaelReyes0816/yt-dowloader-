@@ -288,7 +288,7 @@ class ClasificadorErrores:
         ("members_only", r"members[- ]only|member[- ]only|subscribers?[- ]only"),
         ("age_restricted", r"age[- ]restricted|confirm your age|verify your age"),
         ("bot", r"not a bot|bot check|bot verification|unusual traffic|request complete verification|rate limit|too many requests"),
-        ("cookies", r"could not extract cookies|session expired|keyring"),
+        ("cookies", r"could not extract cookies|session expired|keyring|could not copy .*cookie database|could not copy .*cookies"),
         ("sign_in", r"granted access|requires authentication|must be logged|login required|log ?in required"),
         ("geo", r"not available in your country|geo-?restricted|blocked in your country|unavailable in your (region|country)"),
         ("sign_in", r"\b(sign in|log ?in|loggin)\b"),
@@ -378,7 +378,7 @@ class ClasificadorErrores:
         "geo": "Usa una red en la region permitida para este contenido.",
         "sign_in": "Inicia sesion en tu navegador en la plataforma y activa 'Usar sesion del navegador'.",
         "bot": "Espera unos minutos y vuelve a intentarlo. Si persiste, activa 'Usar sesion del navegador', inicia sesion en YouTube en ese navegador y reintenta.",
-        "cookies": "Abre el navegador, inicia sesion en la plataforma y reintenta. Si el navegador esta en uso, cierra su gestor de contrasenas.",
+        "cookies": "El navegador tiene bloqueada su base de datos de cookies (suele pasar si esta abierto o si su gestor de contrasenas lo impide). Cierra el navegador por completo (revisa el Administrador de tareas: Chrome/Edge/Brave dejan procesos en segundo plano) y reintenta. Si persiste, prueba con otro navegador detectado o exporta las cookies a un archivo.",
         "not_found": "Verifica que la URL este completa y sea correcta.",
         "extractor": "Actualiza yt-dlp desde el Diagnostico o ejecuta: python -m pip install -U \"yt-dlp[default,curl-cffi]\". Si el error es de TikTok y persiste, activa 'Usar sesion del navegador' para pasar el challenge, o espera unos minutos (TikTok bloquea IPs temporalmente).",
         "formato": "Actualiza yt-dlp e intenta de nuevo; tambien puedes cambiar la calidad seleccionada.",
@@ -1225,3 +1225,15 @@ def elegir_navegador_sesion(pref_navegador=""):
         if nav in detectados:
             return nav
     return ""
+
+
+def navegadores_para_reintento(pref_navegador="", detectados=None):
+    if detectados is None:
+        detectados = detectar_navegadores()
+    orden = []
+    if pref_navegador in detectados:
+        orden.append(pref_navegador)
+    for nav in detectados:
+        if nav not in orden:
+            orden.append(nav)
+    return orden
