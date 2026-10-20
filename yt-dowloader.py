@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-__version__ = "3.6.2"
+__version__ = "3.7.0"
 
 import os
 import subprocess
@@ -58,6 +58,8 @@ from theme import (
     GLYPHS,
     PLATAFORMA_BADGE,
     PLATAFORMA_INICIAL,
+    BREAKPOINTS,
+    LAYOUT,
 )
 
 ESTADOS = {
@@ -294,8 +296,7 @@ class QueueCard(ctk.CTkFrame):
     def __init__(self, master, url, plataforma, modo, on_cancel=None, on_retry=None,
                  on_remove=None, ocultar_urls=False, **kwargs):
         super().__init__(master, fg_color=COLORS["bg.surface"], corner_radius=RADII["card"],
-                         height=76, **kwargs)
-        self.grid_propagate(False)
+                         **kwargs)
         self.grid_columnconfigure(1, weight=1)
         self.url = url
         self.ocultar_urls = ocultar_urls
@@ -1142,7 +1143,7 @@ class App(ctk.CTk):
 
         self.title("YT-DownLoader del Jaeger")
         self.geometry("980x720")
-        self.minsize(880, 620)
+        self.minsize(720, 560)
         self.resizable(True, True)
         self.configure(fg_color=COLORS["bg.base"])
 
@@ -1171,10 +1172,14 @@ class App(ctk.CTk):
         self._pistas_cargando = False
         self._latest_pendiente = ""
         self._release_pendiente = None
+        self._modo_layout = None
+        self._resize_job = None
 
         self._build_ui()
         self._aplicar_preferencias()
+        self._restaurar_geometria()
         self.protocol("WM_DELETE_WINDOW", self._on_cerrar)
+        self.bind("<Configure>", self._on_resize)
         self._check_update_async()
         if self.clipboard_auto:
             self._monitorear_clipboard()
@@ -1183,6 +1188,70 @@ class App(ctk.CTk):
         self._guardar_prefs_actuales()
         self._cancelar_monitoreo_clipboard()
         self.destroy()
+
+    _GEOM_RE = None
+
+    def _geometria_valida(self, geom):
+        try:
+            import re as _re
+            return bool(_re.fullmatch(r"\d+x\d+([+-]\d+[+-]\d+)?", geom or ""))
+        except Exception:
+            return False
+
+    def _restaurar_geometria(self):
+        geom = str(self.prefs.get("ventana_geom", "") or "")
+        if not self._geometria_valida(geom):
+            return
+        try:
+            self.update_idletasks()
+            self.geometry(geom)
+            self.after(120, self._asegurar_visible)
+        except Exception:
+            pass
+
+    def _asegurar_visible(self):
+        """Si la posición guardada cae fuera de los monitores actuales, centra la ventana."""
+        try:
+            x, y = self.winfo_x(), self.winfo_y()
+            w, h = self.winfo_width(), self.winfo_height()
+            sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+            if x + 80 < 0 or y + 40 < 0 or x > sw - 80 or y > sh - 40:
+                nx = max(0, (sw - w) // 2)
+                ny = max(0, (sh - h) // 2)
+                self.geometry(f"+{nx}+{ny}")
+        except Exception:
+            pass
+
+    def _geometria_actual(self):
+        try:
+            return f"{self.winfo_width()}x{self.winfo_height()}+{self.winfo_x()}+{self.winfo_y()}"
+        except Exception:
+            return ""
+
+    def _on_resize(self, event=None):
+        if event is not None and event.widget is not self:
+            return
+        if self._resize_job is not None:
+            try:
+                self.after_cancel(self._resize_job)
+            except Exception:
+                pass
+        self._resize_job = self.after(80, self._aplicar_layout_por_ancho)
+
+    def _aplicar_layout_por_ancho(self):
+        self._resize_job = None
+        try:
+            ancho = self.winfo_width()
+        except Exception:
+            return
+        modo = "dos_columnas" if ancho >= BREAKPOINTS["dos_columnas"] else "una_columna"
+        if modo == self._modo_layout:
+            self._reflow_opciones()
+            self._limitar_ancho_cards()
+            return
+        self._modo_layout = modo
+        self._aplicar_layout(modo)
+        self._limitar_ancho_cards()
 
     def _set_window_icon(self):
         try:
@@ -1206,14 +1275,78 @@ class App(ctk.CTk):
 
     def _build_ui(self):
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(4, weight=1)
+        self.grid_rowconfigure(2, weight=1)
 
         self._build_header()
         self._build_annunciador()
+
+        self.body = ctk.CTkFrame(self, fg_color="transparent")
+        self.body.grid(row=2, column=0, sticky="nsew")
+        self.panel_izq = ctk.CTkFrame(self.body, fg_color="transparent")
+        self.panel_der = ctk.CTkFrame(self.body, fg_color="transparent")
+
         self._build_input()
         self._build_options()
         self._build_cola()
         self._build_statusbar()
+
+        self._modo_layout = "una_columna"
+        self._aplicar_layout("una_columna")
+
+    def _aplicar_layout(self, modo):
+        self.panel_izq.grid_forget()
+        self.panel_der.grid_forget()
+        for i in range(2):
+            self.body.grid_columnconfigure(i, weight=0, minsize=0)
+        for i in range(4):
+            self.body.grid_rowconfigure(i, weight=0)
+
+        if modo == "dos_columnas":
+            self.body.grid_columnconfigure(0, weight=0, minsize=LAYOUT["sidebar_w"])
+            self.body.grid_columnconfigure(1, weight=1)
+            self.body.grid_rowconfigure(0, weight=1)
+            self.panel_izq.grid(row=0, column=0, sticky="nsew",
+                                padx=(LAYOUT["padding_h"], LAYOUT["gap"] / 2), pady=0)
+            self.panel_der.grid(row=0, column=1, sticky="nsew",
+                                padx=(LAYOUT["gap"] / 2, LAYOUT["padding_h"]), pady=0)
+        else:
+            self.body.grid_columnconfigure(0, weight=1)
+            self.body.grid_rowconfigure(1, weight=1)
+            self.panel_izq.grid(row=0, column=0, sticky="ew", padx=LAYOUT["padding_h"], pady=0)
+            self.panel_der.grid(row=1, column=0, sticky="nsew", padx=LAYOUT["padding_h"], pady=0)
+
+        self._reflow_opciones()
+        self._reflow_botones_cola()
+
+    def _reflow_opciones(self):
+        self._reflow_fila(self.row_toggles, self._hijos_toggles)
+
+    def _reflow_botones_cola(self):
+        self._reflow_fila(self.btn_row, self._hijos_botones_cola)
+
+    def _reflow_fila(self, contenedor, hijos):
+        if not contenedor or not hijos:
+            return
+        try:
+            ancho_disp = contenedor.winfo_width()
+            if ancho_disp <= 1:
+                return
+            for hijo in hijos:
+                hijo.grid_forget()
+            fila = 0
+            columna = 0
+            usado = 0
+            for hijo in hijos:
+                pedido = hijo.winfo_reqwidth()
+                if columna > 0 and usado + pedido > ancho_disp:
+                    fila += 1
+                    columna = 0
+                    usado = 0
+                hijo.grid(row=fila, column=columna, sticky="w", padx=(0, 6), pady=(0, 6))
+                usado += pedido + 6
+                columna += 1
+        except Exception:
+            pass
 
     def _build_annunciador(self):
         self.annunciador = Annunciador(self)
@@ -1274,9 +1407,10 @@ class App(ctk.CTk):
 
     # ---------- Input ----------
     def _build_input(self):
-        url_frame = ctk.CTkFrame(self, fg_color=COLORS["bg.surface"], corner_radius=RADII["card"])
-        url_frame.grid(row=2, column=0, sticky="ew", padx=20, pady=(15, 10))
+        url_frame = ctk.CTkFrame(self.panel_izq, fg_color=COLORS["bg.surface"], corner_radius=RADII["card"])
+        url_frame.grid(row=0, column=0, sticky="ew", padx=0, pady=(15, 10))
         url_frame.grid_columnconfigure(0, weight=1)
+        self.panel_izq.grid_columnconfigure(0, weight=1)
 
         url_row = ctk.CTkFrame(url_frame, fg_color="transparent")
         url_row.grid(row=0, column=0, sticky="ew", padx=15, pady=12)
@@ -1559,12 +1693,13 @@ class App(ctk.CTk):
 
     # ---------- Options ----------
     def _build_options(self):
-        opt_frame = ctk.CTkFrame(self, fg_color=COLORS["bg.surface"], corner_radius=RADII["card"])
-        opt_frame.grid(row=3, column=0, sticky="ew", padx=20, pady=(0, 10))
+        opt_frame = ctk.CTkFrame(self.panel_izq, fg_color=COLORS["bg.surface"], corner_radius=RADII["card"])
+        opt_frame.grid(row=1, column=0, sticky="ew", padx=0, pady=(0, 10))
         opt_frame.grid_columnconfigure(0, weight=1)
 
         row1 = ctk.CTkFrame(opt_frame, fg_color="transparent")
         row1.grid(row=0, column=0, sticky="ew", padx=15, pady=(12, 8))
+        self.row1 = row1
 
         self.modo_var = ctk.StringVar()
         self.modo_control = SegmentedControl(row1, ["Audio (mp3)", "Video (mp4)"],
@@ -1580,42 +1715,48 @@ class App(ctk.CTk):
 
         row_toggles = ctk.CTkFrame(opt_frame, fg_color="transparent")
         row_toggles.grid(row=1, column=0, sticky="ew", padx=15, pady=(0, 12))
+        self.row_toggles = row_toggles
 
         self.subtitulos_var = ctk.BooleanVar(value=self.prefs.get("subtitulos", False))
-        PillToggle(row_toggles, "Subtítulos", self.subtitulos_var,
+        self.tog_subtitulos = PillToggle(row_toggles, "Subtítulos", self.subtitulos_var,
                    fg_color=COLORS["bg.surface"], text_color=COLORS["text.secondary"],
-                   hover_color=COLORS["bg.surface-hover"]).pack(side="left", padx=(0, 6))
+                   hover_color=COLORS["bg.surface-hover"])
 
         self.playlist_var = ctk.BooleanVar(value=self.prefs.get("playlist", False))
-        PillToggle(row_toggles, "Playlist", self.playlist_var,
+        self.tog_playlist = PillToggle(row_toggles, "Playlist", self.playlist_var,
                    fg_color=COLORS["bg.surface"], text_color=COLORS["text.secondary"],
-                   hover_color=COLORS["bg.surface-hover"]).pack(side="left", padx=(0, 6))
+                   hover_color=COLORS["bg.surface-hover"])
 
         self.clipboard_var = ctk.BooleanVar(value=self.clipboard_auto)
-        PillToggle(row_toggles, "Auto-URL", self.clipboard_var, command=self._toggle_clipboard,
+        self.tog_clipboard = PillToggle(row_toggles, "Auto-URL", self.clipboard_var, command=self._toggle_clipboard,
                    fg_color=COLORS["bg.surface"], text_color=COLORS["text.secondary"],
-                   hover_color=COLORS["bg.surface-hover"]).pack(side="left")
+                   hover_color=COLORS["bg.surface-hover"])
 
         self.ocultar_urls_var = ctk.BooleanVar(value=self._ocultar_urls)
-        PillToggle(row_toggles, "Ocultar URLs", self.ocultar_urls_var, command=self._toggle_ocultar_urls,
+        self.tog_ocultar = PillToggle(row_toggles, "Ocultar URLs", self.ocultar_urls_var, command=self._toggle_ocultar_urls,
                    fg_color=COLORS["bg.surface"], text_color=COLORS["text.secondary"],
-                   hover_color=COLORS["bg.surface-hover"]).pack(side="left", padx=(6, 0))
+                   hover_color=COLORS["bg.surface-hover"])
 
-        ctk.CTkLabel(row_toggles, text="En paralelo:", font=FONTS["small"],
-                     text_color=COLORS["text.secondary"]).pack(side="left", padx=(12, 6))
+        self.lbl_paralelas = ctk.CTkLabel(row_toggles, text="En paralelo:", font=FONTS["small"],
+                     text_color=COLORS["text.secondary"])
         self.paralelas_var = ctk.StringVar(value=str(self.prefs.get("max_paralelas", 1)))
         self.paralelas_option = self._crear_dropdown(row_toggles, self.paralelas_var,
                                                      ["1", "2", "3"], width=60)
-        self.paralelas_option.pack(side="left")
 
-        ctk.CTkLabel(row_toggles, text="Actualizar:", font=FONTS["small"],
-                     text_color=COLORS["text.secondary"]).pack(side="left", padx=(12, 6))
+        self.lbl_update = ctk.CTkLabel(row_toggles, text="Actualizar:", font=FONTS["small"],
+                     text_color=COLORS["text.secondary"])
         mapa_update = {"preguntar": "Preguntar", "auto": "Automático", "desactivado": "Desactivado"}
         self.update_var = ctk.StringVar(
             value=mapa_update.get(self.prefs.get("actualizar_automaticamente"), "Preguntar"))
         self.update_option = self._crear_dropdown(
             row_toggles, self.update_var, ["Preguntar", "Automático", "Desactivado"], width=110)
-        self.update_option.pack(side="left")
+
+        self._hijos_toggles = [
+            self.tog_subtitulos, self.tog_playlist, self.tog_clipboard, self.tog_ocultar,
+            self.lbl_paralelas, self.paralelas_option, self.lbl_update, self.update_option,
+        ]
+        for i, hijo in enumerate(self._hijos_toggles):
+            hijo.grid(row=0, column=i, sticky="w", padx=(0, 6), pady=(0, 6))
 
         row2 = ctk.CTkFrame(opt_frame, fg_color="transparent")
         row2.grid(row=2, column=0, sticky="ew", padx=15, pady=(0, 12))
@@ -1636,15 +1777,18 @@ class App(ctk.CTk):
         row3 = ctk.CTkFrame(opt_frame, fg_color="transparent")
         row3.grid(row=3, column=0, sticky="ew", padx=15, pady=(0, 12))
         row3.grid_columnconfigure(1, weight=1)
+        self.row3 = row3
 
         self.usar_sesion_var = ctk.BooleanVar(value=self.prefs.get("usar_sesion_navegador", False))
-        PillToggle(row3, "Usar sesión del navegador", self.usar_sesion_var,
+        self.tog_sesion = PillToggle(row3, "Usar sesión del navegador", self.usar_sesion_var,
                    command=self._actualizar_estado_navegador,
                    fg_color=COLORS["bg.surface"], text_color=COLORS["text.secondary"],
-                   hover_color=COLORS["bg.surface-hover"]).grid(row=0, column=0, sticky="w", padx=(0, 8))
+                   hover_color=COLORS["bg.surface-hover"])
+        self.tog_sesion.grid(row=0, column=0, sticky="w", padx=(0, 8))
 
-        ctk.CTkLabel(row3, text="Navegador:", font=FONTS["small"],
-                     text_color=COLORS["text.secondary"]).grid(row=0, column=1, sticky="w", padx=(0, 6))
+        self.lbl_navegador = ctk.CTkLabel(row3, text="Navegador:", font=FONTS["small"],
+                     text_color=COLORS["text.secondary"])
+        self.lbl_navegador.grid(row=0, column=1, sticky="w", padx=(0, 6))
 
         pref_nav = self.prefs.get("navegador", "")
         nav_elegido = elegir_navegador_sesion(pref_nav) or (self.navegadores[0] if self.navegadores else "")
@@ -1678,10 +1822,12 @@ class App(ctk.CTk):
 
     # ---------- Cola ----------
     def _build_cola(self):
-        cola_frame = ctk.CTkFrame(self, fg_color=COLORS["bg.surface"], corner_radius=RADII["card"])
-        cola_frame.grid(row=4, column=0, sticky="nsew", padx=20, pady=(0, 10))
+        cola_frame = ctk.CTkFrame(self.panel_der, fg_color=COLORS["bg.surface"], corner_radius=RADII["card"])
+        cola_frame.grid(row=0, column=0, sticky="nsew", padx=0, pady=(15, 10))
         cola_frame.grid_columnconfigure(0, weight=1)
         cola_frame.grid_rowconfigure(1, weight=1)
+        self.panel_der.grid_columnconfigure(0, weight=1)
+        self.panel_der.grid_rowconfigure(0, weight=1)
 
         cola_header = ctk.CTkFrame(cola_frame, fg_color="transparent")
         cola_header.grid(row=0, column=0, sticky="ew", padx=15, pady=(10, 5))
@@ -1710,6 +1856,12 @@ class App(ctk.CTk):
         self.cola_scroll.grid(row=1, column=0, sticky="nsew", padx=15, pady=(0, 10))
         self.cola_scroll.grid_columnconfigure(0, weight=1)
 
+        self.cola_inner = ctk.CTkFrame(self.cola_scroll, fg_color="transparent")
+        self.cola_inner.grid(row=0, column=0, sticky="ew")
+        self.cola_inner.grid_columnconfigure(0, weight=1)
+        self.cola_spacer = ctk.CTkFrame(self.cola_inner, fg_color="transparent", width=0, height=0)
+        self.cola_inner.bind("<Configure>", lambda _e: self._limitar_ancho_cards())
+
         self.actividad_frame = ctk.CTkFrame(cola_frame, fg_color=COLORS["bg.base"], corner_radius=8,
                                             height=140)
         self.actividad_log = ctk.CTkScrollableFrame(self.actividad_frame, fg_color="transparent",
@@ -1719,12 +1871,12 @@ class App(ctk.CTk):
 
         btn_row = ctk.CTkFrame(cola_frame, fg_color="transparent")
         btn_row.grid(row=2, column=0, sticky="ew", padx=15, pady=(0, 10))
+        self.btn_row = btn_row
 
         self.btn_iniciar = ctk.CTkButton(btn_row, text="Iniciar descargas", command=self._iniciar_cola,
                                          font=FONTS["body_bold"], height=36,
                                          fg_color=COLORS["accent.brand"], hover_color=COLORS["accent.brand-hover"],
                                          text_color=COLORS["text.primary"])
-        self.btn_iniciar.pack(side="left", padx=(0, 8))
         _configurar_foco_visible(self.btn_iniciar)
 
         self.btn_detener = ctk.CTkButton(btn_row, text="Detener todo", command=self._detener_todo,
@@ -1732,19 +1884,24 @@ class App(ctk.CTk):
                                          fg_color="transparent", hover_color=COLORS["bg.surface-hover"],
                                          border_color=COLORS["accent.error"], border_width=1,
                                          text_color=COLORS["accent.error"])
-        self.btn_detener.pack(side="left", padx=(0, 8))
         self.btn_detener.configure(state="disabled")
 
-        ctk.CTkButton(btn_row, text="Limpiar cola", command=self._limpiar_cola,
+        self.btn_limpiar = ctk.CTkButton(btn_row, text="Limpiar cola", command=self._limpiar_cola,
                       font=FONTS["body"], height=36,
                       fg_color="transparent", hover_color=COLORS["bg.surface-hover"],
                       border_color=COLORS["border.subtle"], border_width=1,
-                      text_color=COLORS["text.secondary"]).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(btn_row, text="Diagnóstico", command=self._abrir_diagnostico,
+                      text_color=COLORS["text.secondary"])
+        self.btn_diagnostico = ctk.CTkButton(btn_row, text="Diagnóstico", command=self._abrir_diagnostico,
                       font=FONTS["body"], height=36,
                       fg_color="transparent", hover_color=COLORS["bg.surface-hover"],
                       border_color=COLORS["border.subtle"], border_width=1,
-                      text_color=COLORS["text.secondary"]).pack(side="left", padx=(8, 0))
+                      text_color=COLORS["text.secondary"])
+
+        self._hijos_botones_cola = [
+            self.btn_iniciar, self.btn_detener, self.btn_limpiar, self.btn_diagnostico,
+        ]
+        for i, hijo in enumerate(self._hijos_botones_cola):
+            hijo.grid(row=0, column=i, sticky="w", padx=(0, 8), pady=(0, 6))
 
         self._configurar_atajos()
 
@@ -1767,6 +1924,23 @@ class App(ctk.CTk):
             self.actividad_log.pack(fill="both", expand=True, padx=8, pady=8)
             self.actividad_btn.configure(text="Actividad ▾")
 
+    def _limitar_ancho_cards(self):
+        try:
+            ancho = self.cola_inner.winfo_width()
+            if ancho <= 1:
+                return
+            max_w = LAYOUT["card_max_w"]
+            if ancho > max_w + 4:
+                self.cola_spacer.grid(row=0, column=1, sticky="nsew")
+                self.cola_inner.grid_columnconfigure(0, weight=0, minsize=max_w)
+                self.cola_inner.grid_columnconfigure(1, weight=1)
+            else:
+                self.cola_spacer.grid_forget()
+                self.cola_inner.grid_columnconfigure(0, weight=1, minsize=0)
+                self.cola_inner.grid_columnconfigure(1, weight=0)
+        except Exception:
+            pass
+
     def _toggle_empty_state(self):
         if hasattr(self, "empty_state_frame"):
             self.empty_state_frame.destroy()
@@ -1774,7 +1948,7 @@ class App(ctk.CTk):
         if self.queue_items:
             return
 
-        self.empty_state_frame = ctk.CTkFrame(self.cola_scroll, fg_color="transparent")
+        self.empty_state_frame = ctk.CTkFrame(self.cola_inner, fg_color="transparent")
         self.empty_state_frame.grid(row=0, column=0, sticky="nsew", pady=60)
         self.empty_state_frame.grid_columnconfigure(0, weight=1)
 
@@ -1802,7 +1976,7 @@ class App(ctk.CTk):
     # ---------- Status bar ----------
     def _build_statusbar(self):
         status_bar = ctk.CTkFrame(self, fg_color=COLORS["bg.surface"], corner_radius=0, height=38)
-        status_bar.grid(row=5, column=0, sticky="ew", padx=0, pady=0)
+        status_bar.grid(row=3, column=0, sticky="ew", padx=0, pady=0)
         status_bar.grid_columnconfigure(1, weight=1)
 
         self.estado_var = ctk.StringVar(value="Listo")
@@ -1846,6 +2020,7 @@ class App(ctk.CTk):
             "actualizar_automaticamente": {
                 "Preguntar": "preguntar", "Automático": "auto", "Desactivado": "desactivado",
             }.get(self.update_var.get(), "preguntar"),
+            "ventana_geom": self._geometria_actual() or self.prefs.get("ventana_geom", ""),
             "historial": self.historial[-100:],
         })
         guardar_preferencias(self.prefs)
@@ -2098,7 +2273,7 @@ class App(ctk.CTk):
                 })
 
             card = QueueCard(
-                self.cola_scroll, url, plataforma, item["modo"],
+                self.cola_inner, url, plataforma, item["modo"],
                 on_cancel=lambda it=item: self._cancelar_item(it),
                 on_retry=lambda it=item: self._reintentar_item(it),
                 on_remove=lambda it=item: self._quitar_item(it),

@@ -451,6 +451,7 @@ def cargar_preferencias():
         "actualizar_automaticamente": "preguntar",
         "ultima_revision_update": 0,
         "version_avisada": "",
+        "ventana_geom": "",
     }
     try:
         if os.path.isfile(CONFIG_FILE):

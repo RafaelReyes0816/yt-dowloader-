@@ -27,7 +27,7 @@ System deps: `ffmpeg` on PATH (mp3 conversion + mp4 muxing). Debian/Ubuntu: `sud
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest                # offline suite: 220 passed, 16 live deselected (v3.6.2)
+.venv/bin/python -m pytest                # offline suite: 220 passed, 16 live deselected (v3.7.0)
 .venv/bin/python -m pytest core_tests/test_core.py -k <nombre> -q   # single test
 .venv/bin/python -m py_compile yt-dowloader.py core.py theme.py     # syntax check (run before committing)
 ```
@@ -58,6 +58,7 @@ Note: `core_tests/pre_release_check.py` (automated pre-release E2E download) exi
 
 - `core.py` — pure business logic, **no UI/network on import** (testable): `PLATFORM_REGEX`, `extraer_url_completa`, `detectar_plataforma`, `ClasificadorErrores` (yt-dlp errors → friendly Spanish + `detalle` field, sanitized via `sanitizar_detalle`), `verificar_url(url, navegador=None, cancel_flag=None)`, `extraer_info_video`, `descargar_musica(..., cancel_flag, ydl_holder, postprocessor_callback)`, `find_ffmpeg`, prefs load/save, `comparar_versiones`, `check_for_update()` (GitHub Releases) + `obtener_ultima_version_ytdlp()` (PyPI), `PLATAFORMAS_CONFIG`, `RESOLUCIONES_YOUTUBE`, `RESOLUCIONES_GENERICAS`, `CALIDADES_AUDIO`/`CALIDADES_VIDEO` (**the UI must not hardcode qualities**), `TIMEOUT_RED`, `ORDEN_NAVEGADORES`.
 - `yt-dowloader.py` — UI: `App`, `VentanaDiagnostico`, `QueueCard`, `SegmentedControl`, `PillToggle`, `Annunciador` (transient HUD), `SpinnerRing`. **All UI updates must go through `self.after(0, ...)`** — Tkinter is not thread-safe; worker threads never touch widgets directly.
+- Responsive layout (v3.7.0): `_build_ui` builds `body` → `panel_izq` (input+opciones) + `panel_der` (cola); header/annunciador/statusbar stay on `self`. `<Configure>` → debounced (`_resize_job`, 80 ms) `_on_resize` → `_aplicar_layout_por_ancho`: `< BREAKPOINTS["dos_columnas"]` (1080 px, `theme.py`) → 1 columna apilada, `>=` → 2 columnas (sidebar fijo `LAYOUT["sidebar_w"]`=360 px, cola flexible). `_aplicar_layout` only re-grids the **same** panels (never recreates widgets); `_reflow_fila`/`_reflow_opciones`/`_reflow_botones_cola` re-wrap option toggles and queue buttons by `winfo_reqwidth()` vs container width; `_limitar_ancho_cards` caps `QueueCard`s at `LAYOUT["card_max_w"]`=900 px (left-aligned) via a trailing spacer column in `cola_inner`. Window geometry persisted as pref `ventana_geom` (`_geometria_actual()` on save, `_restaurar_geometria()` + `_asegurar_visible()` on start).
 - `theme.py` — design tokens (colors/fonts/radii) + `GLYPHS`.
 - YouTube selectors (do NOT "simplify" — `RESOLUCIONES_YOUTUBE` in `core.py:161-168`): 360p–1080p prefer H.264 `[vcodec^=avc1]` + AAC `[ext=m4a]` with plain-mp4 fallback, because yt-dlp defaults to AV1/VP9 which VLC/WMP cannot open inside mp4 (GitHub issues #1/#2, "VLC es incapaz de abrir el MRL"). **1440p/2160p must NOT use `[ext=mp4]` or the avc1 filter** — 2K/4K are only served as VP9/AV1.
 - Filenames: YouTube uses `%(title)s [%(id)s].%(ext)s` (uniqueness); other platforms `%(title)s.%(ext)s`.

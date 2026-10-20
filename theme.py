@@ -83,6 +83,19 @@ RADII = {
     "pill": 999,
 }
 
+# Puntos de quiebre de ancho (px) para el layout adaptable.
+BREAKPOINTS = {
+    "dos_columnas": 1080,
+}
+
+# Medidas del layout adaptable.
+LAYOUT = {
+    "sidebar_w": 360,
+    "card_max_w": 900,
+    "padding_h": 20,
+    "gap": 10,
+}
+
 PLATAFORMA_BADGE = {
     "YouTube": "#FF4F6E",
     "Instagram": "#E1306C",
