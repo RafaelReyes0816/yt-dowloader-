@@ -1,73 +1,81 @@
 # AGENTS.md
 
+## Communication
+
+Reply to the user **in Spanish** (explanations, plans, questions, commit messages). Code identifiers stay English; UI strings are Spanish.
+
 ## Project overview
 
-Python desktop app (CustomTkinter UI in `yt-dowloader.py` + pure business logic in `core.py`, using yt-dlp) that downloads audio (mp3) or video (mp4) from many platforms with quality selection, a download queue with cancel/parallel support, and auto-update checking via GitHub Releases API.
+Python desktop app: CustomTkinter UI (`yt-dowloader.py`) + pure logic (`core.py`) on yt-dlp. Downloads mp3/mp4 from 8 platforms (YouTube, Instagram, Facebook, TikTok, Twitch, Vimeo, Twitter/X, Reddit) with quality selection, a cancellable optionally-parallel queue, browser-session auth, and auto-update via GitHub Releases.
+
+## Repo quirks
+
+- Repo path contains **spaces** (`.../Proyectos web/yt-dowloader-`) — quote paths in shell commands.
+- A `.venv/` with dev deps already exists (pytest, customtkinter 6.0.0, yt-dlp 2026.8.19, pyinstaller, curl_cffi). Prefer `.venv/bin/python`, `.venv/bin/pytest`, `.venv/bin/pyinstaller`. Pillow is NOT in the venv (only used for the window icon, wrapped in `try/except`) — install `requirements.txt` if you need it.
+- No linter/formatter/typecheck is configured. Verification = pytest + `py_compile`.
+- The entry module has hyphens (`yt-dowloader.py`) and cannot be imported by name; tests only import `core`/`theme`. Run the app as a script.
 
 ## Run
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt   # or: requirements-dev.txt (adds pytest)
 python yt-dowloader.py
 ```
 
-System dependency: `ffmpeg` must be installed and on PATH (required by yt-dlp for mp3 conversion and mp4 muxing). On Debian/Ubuntu: `sudo apt install python3-tk` if tkinter is missing.
+System deps: `ffmpeg` on PATH (mp3 conversion + mp4 muxing). Debian/Ubuntu: `sudo apt install python3-tk` if tkinter is missing. Download target `Mi_musica/` is created at runtime.
+
+## Tests
+
+```bash
+.venv/bin/python -m pytest                # offline suite: 216 passed, 16 live deselected (v3.6.1)
+.venv/bin/python -m pytest core_tests/test_core.py -k <nombre> -q   # single test
+.venv/bin/python -m py_compile yt-dowloader.py core.py theme.py     # syntax check (run before committing)
+```
+
+- `pytest.ini` sets `testpaths = core_tests`, `pythonpath = .`, `addopts = -m "not live"` → live tests are skipped by default and **CI only runs this offline suite** (on Linux, before `pyinstaller`; failure blocks the release).
+- Live suite: `core_tests/test_plataformas_live.py` — 16 tests over 8 real public URLs, marked `@pytest.mark.live`. Run manually only when needed: `.venv/bin/python -m pytest core_tests/test_plataformas_live.py -m live -v`. No CI job.
+- CI cannot catch real-download bugs — the AV1/VLC regression shipped that way. Before tagging a release, manually verify one real mp3 + one mp4 download (expect `h264/avc1` + `aac` in the mp4).
 
 ## Build standalone executable
 
 ```bash
-pip install pyinstaller yt-dlp customtkinter
-pyinstaller yt-dowloader.spec
+pyinstaller yt-dowloader.spec    # output in dist/
 ```
 
-Output goes to `dist/`. The spec is **multiplatform** — no `target_arch` hardcoded. PyInstaller autodetects the platform.
+Spec is **multiplatform** (no `target_arch`; PyInstaller autodetects). Its `hiddenimports` must keep `curl_cffi`/`curl_cffi.requests` (TikTok impersonation) and it bundles CustomTkinter data files.
 
-## CI/CD
+## Release flow
 
-GitHub Actions workflow at `.github/workflows/build.yml` builds for Linux, Windows (x64), and macOS (Intel + ARM) on tag push (`v*`). Uses `softprops/action-gh-release` to publish executables.
+1. Bump `__version__` (line 2 of `yt-dowloader.py`). Commit style: `feat vX.Y.Z: ...` / `fix vX.Y.Z: ...` (message in Spanish).
+2. Verify: pytest + py_compile (+ the manual real-download check above).
+3. `git tag vX.Y.Z && git push origin vX.Y.Z` — push **the tag itself**; lightweight tags are not pushed by `--follow-tags`.
+4. Tag `v*` triggers `.github/workflows/build.yml`: builds Linux/Windows/macOS (Python 3.12), runs the offline suite on Linux, packages NSIS `.exe` + portable zip, `.deb` + tar.gz, `.dmg` + `.app` zip (Windows CI bundles `ffmpeg.exe`/`ffprobe.exe`), publishes via `softprops/action-gh-release`. Also runnable manually via `workflow_dispatch`.
+5. Update `MEMORY.md` on the final commit of the batch (its header states the rule: version, commit/tag hash, CI status, test count).
 
-To trigger a release:
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
+Note: `core_tests/pre_release_check.py` (automated pre-release E2E download) existed in v3.4.x and was **removed in the 2026-10-18 revert** — recreate it if you want that automation back.
 
 ## Architecture
 
-- Skills (v3.3+): project skills live in `.opencode/skills/` (`security-best-practices`, `tdd`, `frontend-design`, `web-design-guidelines`) and are indexed in `SKILLS_PROYECTO.md`. Invoke them by exact name via the `skill` tool. (`~/.agents/skills` and `~/.claude/skills` auto-load the rest of the installed catalog.)
-- `yt-dowloader.py` — CustomTkinter UI (`App`, `VentanaDiagnostico`, `QueueCard`, `SegmentedControl`, `PillToggle`, `Annunciador`, `SpinnerRing`). Imports business logic from `core.py`.
-- `theme.py` — design tokens (colors, fonts, radii) + `GLYPHS`. `Annunciador` shows transient HUD status (persistent while "working", auto-clear 4s otherwise); `SpinnerRing` is the indeterminate animated ring used for verification/conversion and diagnostics checks. All UI feedback is threaded through `self.after(0, ...)`.
-- `core.py` — pure business logic, no UI/network on import (testable): `PLATFORM_REGEX`, `extraer_url_completa` (extrae una URL completa —con query strings, parentesis y puntuacion limpiados— desde un texto/portapapeles), `detectar_plataforma`, `ClasificadorErrores`, `verificar_url`, `extraer_info_video`, `descargar_musica`, `find_ffmpeg`, prefs load/save, `comparar_versiones`, `elegir_navegador_sesion`, `PLATAFORMAS_CONFIG`, `RESOLUCIONES_YOUTUBE`. `Mi_musica/` folder is created at runtime as download target. `check_for_update()` queries GitHub Releases API.
-- Platforms (v3.0+): YouTube, Instagram, Facebook, TikTok, Twitch, Vimeo, Twitter/X (`twitter.com`/`x.com`), Reddit.
-- Filenames (v3.0+): YouTube downloads use `%(title)s [%(id)s].%(ext)s` to guarantee uniqueness; other platforms use `%(title)s.%(ext)s`.
-- Cancel (v3.0+): each `QueueCard` has a "Cancelar" button and there's a global "Detener todo". `descargar_musica()` accepts `cancel_flag` (a `threading.Event`) checked in the progress hook, which raises `DescargaCancelada` (in `core.py`) to abort `ydl.download()`; and `ydl_holder` (a dict) to expose the active `YoutubeDL` for immediate stop. (v3.3.1+) The postprocessor hook also checks `cancel_flag`, so cancel works during the convert phase too; `_limpiar_cola` now aborts each item hard via `_cancelar_item_fuerte` and resets buttons immediately — a stale worker's `finally` cannot disable buttons of a newer run thanks to the `_cola_run_id` guard.
-- Parallelism (v3.0+): optional `max_paralelas` pref (1-3, default 1). `_procesar_cola` uses a `ThreadPoolExecutor` when >1; `_procesar_item` handles a single item. All UI updates go through `self.after(0, ...)`.
-- Errors (v3.0+): non-`DownloadError` exceptions now also go through `ClasificadorErrores` (with real technical message surfaced) before falling back to the generic message.
-- Auth support (v2.2+): `ClasificadorErrores` maps yt-dlp errors / `availability` field to friendly Spanish messages + suggestions; `detectar_navegadores()` + `construir_opciones_cookies()` enable optional browser-session downloads (`cookiesfrombrowser`); `verificar_url()` runs a pre-download restriction check; `VentanaDiagnostico` is the modal diagnostics window. Prefs `usar_sesion_navegador` / `navegador` persist the auth config. No credentials are ever stored.
-- Auth auto-retry (v2.2.1+): when a download fails with `private`/`sign_in`/`bot`/`age_restricted`/`members_only`/`cookies` error and session is disabled, the app retries automatically once with the first detected browser (order: Firefox > Chrome > Brave > Edge) unless the user has explicitly enabled session.
-- Diagnostic PyPI check (v2.2.1+): `obtener_ultima_version_ytdlp()` queries PyPI to compare installed yt-dlp version against the latest; shows DESACTUALIZADO in red with an "Actualizar motor yt-dlp" button that runs `pip install -U yt-dlp` (or opens GitHub Releases for frozen builds). The old behavior comparing app releases was removed.
-- Error detail surfacing (v2.2.1+): every classified error now carries a `detalle` field (truncated raw yt-dlp message) shown in error dialogs and the diagnostics window for easier troubleshooting.
-- Quality for all platforms (v3.1+): non-YouTube audio honors the chosen `calidad` bitrate (`preferredquality`); non-YouTube video uses `RESOLUCIONES_GENERICAS`. YouTube resolutions now include 1440p/2160p — these selectors must NOT use `[ext=mp4]` (4K/2K only served as VP9/AV1), while 360p–1080p keep the mp4 filter and prefer H.264 (`[vcodec^=avc1]`) + AAC (`bestaudio[ext=m4a]`) with the previous selector as fallback, because yt-dlp defaults to AV1 (`av01`) and VLC cannot open AV1/VP9 inside mp4 ("VLC es incapaz de abrir el MRL") (fix reaplicado en v3.3.2 sobre la base de v3.3.1).
-- Cancel in `verificar_url` (v3.1+): `verificar_url(url, navegador=None, cancel_flag=None)` catches `DescargaCancelada` and returns `restriccion={"tipo": "cancelada"}`.
-- "Convirtiendo" phase (v3.1+): `descargar_musica(..., postprocessor_callback=None)` wires `postprocessor_hooks` so the UI can render the convert phase (`started`/`finished`).
-- Anti-hang (v3.3.1+): `_opciones_base()` (used by `verificar_url`) forces `noplaylist=True` so verification never crawls an entire playlist. Both verification and download options set `socket_timeout=TIMEOUT_RED` (20 s) so a stalled network cannot hang the UI indefinitely.
-- Diagnostics raise-above (v3.3.1+): `VentanaDiagnostico` calls `transient(self.master)` and schedules `_encima()` at 120 ms (`deiconify`+`lift`+`focus_force`+`-topmost` for 300 ms then auto-clears). Calling `lift()` in `__init__` before the Toplevel is mapped silently fails and the dialog opens behind the main window.
-- TikTok fix (v3.1+): TikTok in v3.0 failed with "Unexpected response from webpage request" because the venv lacked `curl_cffi` (impersonation) and had an outdated yt-dlp (2026.7.4). Fix: `yt-dlp[default,curl-cffi]>=2026.8.19` in `requirements.txt`, hiddenimports `curl_cffi`/`curl_cffi.requests` in the spec, and the classifier now maps TikTok extraction/impersonation errors to a friendly `extractor` message with its own suggestion text.
-- Privacy in UI (v3.3+): pref `ocultar_urls` (default ON) + `enmascarar_url()` (shows `youtu.be/···`-style short form) applied to queue cards, diagnostics, history and copy; `sanitizar_detalle(detalle, url)` strips token/acceso-style query params before the raw yt-dlp message is shown; error logging goes through `_registrar_error` (renamed from `_mostrar_error_amigable`) with sanitized detail.
-- Input validation & clipboard (v3.3+): inline UX via `validar_url_campo()` → url entry border state (`url_valida`); `sanear_texto_clipboard()` + debounced, cancelable clipboard polling (`_clipboard_job` / `_cancelar_monitoreo_clipboard()`, cancelled in `_on_cerrar`); hint copy in sentence case ("Pega una URL para empezar", "URL no compatible · …", "Ya está en cola").
-- Shortcuts & a11y (v3.3+): `_configurar_atajos` (Ctrl+Return add, Ctrl+L clear, Ctrl+D toggle auto-URL) with helper `_alternar_auto_url`; `_configurar_foco_visible(btn)` focus ring on `btn_agregar`/`btn_iniciar`; `_detectar_motion_reducida()` (macOS `osascript`) → `MOTION_REDUCIDA` makes `_intervalo_anim()` 160ms instead of 40ms with an immediate first check.
-- Cleanup (v3.3+): `core.py` owns `CALIDADES_AUDIO`/`CALIDADES_VIDEO` (UI no longer hardcodes them); `cargar_preferencias` prunes the legacy `tema` key; dead `ACCION_BOTON` dict removed; spinners unified through module-level `_pintar_anillo(canvas, cx, cy, r, width, angle, color, con_fondo=True)`; "Convirtiendo" log dedup via `item["_pp_iniciado"]` (reset in `_reintentar_item`).
-- Tests (v3.0+): `core_tests/test_core.py` (pytest) covers pure logic (platform detection, regex, classifier, version compare, outtmpl/options, cancel hook, postprocessor cancel, non-YouTube quality, 1440p/2160p, compatibilidad de códec VLC (avc1), `verificar_url` cancel, prefs roundtrip, `socket_timeout`/`noplaylist` anti-hang). 146 tests total. Run with `.venv/bin/python -m pytest`. Dev deps in `requirements-dev.txt`.
-- Live integration tests (v3.1+): `core_tests/test_plataformas_live.py` hits 8 real public URLs (YouTube/Instagram/Facebook/TikTok/Twitch/Vimeo/Twitter/Reddit), marked `@pytest.mark.live`. They are SKIPPED by default (`-m "not live"`). Run manually and only when needed: `.venv/bin/python -m pytest core_tests/test_plataformas_live.py -m live -v`. No CI job for them.
-- CI (v3.0+): `.github/workflows/build.yml` runs `pytest` on the Linux build member before `pyinstaller`; a test failure blocks the release.
-- `yt-dowloader.spec` — PyInstaller build config (multiplatform, includes CustomTkinter data files).
-- `.github/workflows/build.yml` — CI/CD for 3 platforms.
-- `requirements.txt` — `yt-dlp`, `customtkinter`, `pyinstaller`.
+- `core.py` — pure business logic, **no UI/network on import** (testable): `PLATFORM_REGEX`, `extraer_url_completa`, `detectar_plataforma`, `ClasificadorErrores` (yt-dlp errors → friendly Spanish + `detalle` field, sanitized via `sanitizar_detalle`), `verificar_url(url, navegador=None, cancel_flag=None)`, `extraer_info_video`, `descargar_musica(..., cancel_flag, ydl_holder, postprocessor_callback)`, `find_ffmpeg`, prefs load/save, `comparar_versiones`, `check_for_update()` (GitHub Releases) + `obtener_ultima_version_ytdlp()` (PyPI), `PLATAFORMAS_CONFIG`, `RESOLUCIONES_YOUTUBE`, `RESOLUCIONES_GENERICAS`, `CALIDADES_AUDIO`/`CALIDADES_VIDEO` (**the UI must not hardcode qualities**), `TIMEOUT_RED`, `ORDEN_NAVEGADORES`.
+- `yt-dowloader.py` — UI: `App`, `VentanaDiagnostico`, `QueueCard`, `SegmentedControl`, `PillToggle`, `Annunciador` (transient HUD), `SpinnerRing`. **All UI updates must go through `self.after(0, ...)`** — Tkinter is not thread-safe; worker threads never touch widgets directly.
+- `theme.py` — design tokens (colors/fonts/radii) + `GLYPHS`.
+- YouTube selectors (do NOT "simplify" — `RESOLUCIONES_YOUTUBE` in `core.py:161-168`): 360p–1080p prefer H.264 `[vcodec^=avc1]` + AAC `[ext=m4a]` with plain-mp4 fallback, because yt-dlp defaults to AV1/VP9 which VLC/WMP cannot open inside mp4 (GitHub issues #1/#2, "VLC es incapaz de abrir el MRL"). **1440p/2160p must NOT use `[ext=mp4]` or the avc1 filter** — 2K/4K are only served as VP9/AV1.
+- Filenames: YouTube uses `%(title)s [%(id)s].%(ext)s` (uniqueness); other platforms `%(title)s.%(ext)s`.
+- Cancel: `cancel_flag` (`threading.Event`) is checked in **both** the progress hook and the postprocessor hook (convert phase is cancellable); `ydl_holder` exposes the active `YoutubeDL` for an immediate stop; `_limpiar_cola` hard-aborts items via `_cancelar_item_fuerte`, and `_cola_run_id` stops a stale worker's `finally` from re-disabling buttons of a newer run. `verificar_url` catches `DescargaCancelada` → `restriccion={"tipo": "cancelada"}`.
+- Parallel queue: pref `max_paralelas` (1–3, default 1); `_procesar_cola` uses `ThreadPoolExecutor` when >1, `_procesar_item` handles one item.
+- Anti-hang: `_opciones_base()` (used by `verificar_url`) forces `noplaylist=True`; verify + download set `socket_timeout=TIMEOUT_RED` (20 s).
+- Auth: optional `cookiesfrombrowser` session (`detectar_navegadores()` + `construir_opciones_cookies()`); **no credentials ever stored**. Auto-retry once with the first detected browser (`ORDEN_NAVEGADORES`: firefox > chrome > brave > edge) on private/sign_in/bot/age_restricted/members_only/cookies errors when the session pref is off. Prefs `usar_sesion_navegador`/`navegador`.
+- Diagnostics window: `lift()` in `__init__` fails silently before a Toplevel is mapped → `VentanaDiagnostico` uses `transient(self.master)` + `self.after(120, self._encima)` (`deiconify`+`lift`+`focus_force`+`-topmost` for 300 ms). Same trap applies to any new dialog.
+- TikTok: needs `yt-dlp[default,curl-cffi]>=2026.8.19` (requirements) + `curl_cffi` hiddenimports in the spec (impersonation); the classifier maps extraction/impersonation errors to a friendly `extractor` message.
+- Privacy: pref `ocultar_urls` (default ON) + `enmascarar_url()` masks URLs in queue/diagnostics/history/copy; error logging goes through `_registrar_error` with sanitized detail.
+- Deliberately reverted (2026-10-18, at user request): the whole v3.4.x line (audio/subtitle language selectors, embedded subtitles, tmpdir "sin restos", `[id]` suffix on all platforms, `pre_release_check.py`). **Do not re-apply it from git history without asking** — it caused issues #1/#2 and the root cause was never confirmed. v3.5.0 re-added a *different* feature (YouTube additional audio tracks / doblajes, `pista_label`/`tmpfile_callback` params) — that one is intentional and stays.
+- Skills live in `.opencode/skills/` and are indexed in `SKILLS_PROYECTO.md` (loaded via `.opencode/opencode.json`); invoke by exact name via the `skill` tool. Restart opencode after changing `.opencode/`.
 
 ## Notes
 
-- Filename typo `dowloader` (missing 'n') is intentional — matches the PyInstaller spec output name. Do not rename without updating the spec.
-- UI is entirely in Spanish.
-- `GITHUB_REPO` constant in `core.py` must match your actual GitHub repo path for auto-update to work.
-- `bfg-*.jar` files in repo are BFG Repo-Cleaner (used to purge secrets from git history). Not part of the app. Ignored by `.gitignore` for new files.
-- Security (v3.3+): SEC-01/SEC-02 of the 2026-09-14 audit are mitigated (ocultar_urls, enmascarar_url, sanitizar_detalle). Open items: SEC-03 — anchor `PLATFORM_REGEX`/`extraer_url_completa` to the real host (now substring matching accepts `youtube.com.evil.example`); SEC-04 — `os.chmod(CONFIG_FILE, 0o600)` on save and validate `saved` is a dict on load. SEC-05 (`cookiesfrombrowser`) needs no change — credentials are never stored.
+- Filename typo `dowloader` (missing 'n') is intentional — it matches the PyInstaller spec output name. Do not rename without updating the spec.
+- UI is 100% Spanish; input hints in sentence case ("Pega una URL para empezar", "URL no compatible · …").
+- `GITHUB_REPO` in `core.py` must match the actual GitHub repo path or auto-update breaks. Auto-update (v3.6.0+) downloads the release asset, verifies it against `SHA256SUMS` (`verificar_sha256`), and runs `comando_actualizacion` (silent NSIS / `pkexec dpkg` / opens the .dmg). v3.5.0 and earlier installs have **no** auto-update — they must be upgraded manually once.
+- `MEMORY.md` is the versioned session checkpoint: read it before starting (it also holds CustomTkinter 6.0.0 widget quirks — `CTkEntry.bind` only fires on the inner `_entry`, `cola_scroll`/root use `grid` not `pack`) and update it on the final commit of a release batch.
+- `bfg-*.jar` files are BFG Repo-Cleaner (git-history secret purging), not part of the app. They appear in `.gitignore` but are still **tracked in git** (`git rm --cached` was never run) — don't reference them from code or the spec.
+- Open security items (2026-09-14 audit): **SEC-03** — anchor `PLATFORM_REGEX`/`extraer_url_completa` to the real host (substring matching currently accepts `youtube.com.evil.example`); **SEC-04** — `os.chmod(CONFIG_FILE, 0o600)` on save and validate `saved` is a dict on load. SEC-05 (`cookiesfrombrowser`) needs no change.

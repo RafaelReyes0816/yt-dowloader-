@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-__version__ = "3.6.0"
+__version__ = "3.6.1"
 
 import os
 import subprocess
@@ -554,7 +554,7 @@ class QueueCard(ctk.CTkFrame):
 
 
 class VentanaDiagnostico(ctk.CTkToplevel):
-    def __init__(self, master, url="", navegador=""):
+    def __init__(self, master, url="", navegador="", navegador_pref=""):
         super().__init__(master)
         self.title("Diagnóstico")
         self.geometry("560x520")
@@ -562,6 +562,7 @@ class VentanaDiagnostico(ctk.CTkToplevel):
         self.resizable(True, True)
         self.url = url.strip()
         self.navegador = navegador
+        self.navegador_pref = navegador_pref
         self.checks = {}
         self._build_ui()
         self.transient(self.master)
@@ -732,6 +733,12 @@ class VentanaDiagnostico(ctk.CTkToplevel):
 
         resultado = verificar_url(self.url, self.navegador)
         restriccion = resultado.get("restriccion")
+        if restriccion and restriccion.get("tipo") in TIPOS_REINTENTO_SESION and not self.navegador:
+            nav = self.navegador_pref
+            if nav:
+                self._set("acceso", f"Reintentando con {nav.capitalize()}…", COLORS["accent.progress"])
+                resultado = verificar_url(self.url, nav)
+                restriccion = resultado.get("restriccion")
         if restriccion:
             self._set("acceso", "RESTRINGIDO · " + restriccion["tipo"], COLORS["accent.error"])
             texto = restriccion["mensaje"]
@@ -1572,7 +1579,8 @@ class App(ctk.CTk):
                      text_color=COLORS["text.secondary"]).grid(row=0, column=1, sticky="w", padx=(0, 6))
 
         pref_nav = self.prefs.get("navegador", "")
-        nav_inicial = pref_nav.capitalize() if pref_nav in self.navegadores else (self.navegadores[0].capitalize() if self.navegadores else "Sin detectar")
+        nav_elegido = elegir_navegador_sesion(pref_nav) or (self.navegadores[0] if self.navegadores else "")
+        nav_inicial = nav_elegido.capitalize() if nav_elegido else "Sin detectar"
         self.navegador_var = ctk.StringVar(value=nav_inicial)
         self.navegador_option = self._crear_dropdown(row3, self.navegador_var,
                                                      [n.capitalize() for n in self.navegadores] or ["Sin detectar"],
@@ -1764,7 +1772,7 @@ class App(ctk.CTk):
             "playlist": self.playlist_var.get(),
             "clipboard_auto": self.clipboard_var.get(),
             "usar_sesion_navegador": self.usar_sesion_var.get(),
-            "navegador": self._navegador_seleccionado(),
+            "navegador": self._navegador_preferido(),
             "max_paralelas": int(self.paralelas_var.get()) if self.paralelas_var.get().isdigit() else 1,
             "ocultar_urls": self.ocultar_urls_var.get(),
             "actualizar_automaticamente": {
@@ -1774,17 +1782,18 @@ class App(ctk.CTk):
         })
         guardar_preferencias(self.prefs)
 
-    def _navegador_seleccionado(self):
-        if not self.usar_sesion_var.get() or not self.navegadores:
-            return ""
+    def _navegador_preferido(self):
         valor = self.navegador_var.get().lower()
         return valor if valor in self.navegadores else ""
 
+    def _navegador_seleccionado(self):
+        if not self.usar_sesion_var.get() or not self.navegadores:
+            return ""
+        return self._navegador_preferido()
+
     def _actualizar_estado_navegador(self):
         activo = self.usar_sesion_var.get()
-        if not activo and self.navegador_var.get() == "Sin detectar":
-            pass
-        state = "normal" if (activo and self.navegadores) else "disabled"
+        state = "normal" if self.navegadores else "disabled"
         self.navegador_option.configure(state=state)
         if activo and not self.navegadores:
             self._log("No se detectaron navegadores; la sesión no estará activa.")
@@ -2386,7 +2395,7 @@ class App(ctk.CTk):
                 url = item["url"]
                 break
         navegador = self._navegador_seleccionado()
-        VentanaDiagnostico(self, url, navegador)
+        VentanaDiagnostico(self, url, navegador, self._elegir_navegador_sesion())
 
     # ---------- Update ----------
     def _check_update_async(self, forzar=False):

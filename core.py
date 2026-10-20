@@ -122,7 +122,10 @@ TIMEOUT_RED = 20
 
 TIPOS_REINTENTO_SESION = {"private", "members_only", "age_restricted", "sign_in", "cookies", "bot"}
 
-ORDEN_NAVEGADORES = ["firefox", "chrome", "brave", "edge"]
+ORDEN_NAVEGADORES = ["brave", "firefox", "chrome", "edge"]
+
+PERFIL_CHROMIUM = "Local State"
+PERFIL_FIREFOX = "profiles.ini"
 
 NAVEGADORES_RUTAS = {
     "chrome": {
@@ -145,6 +148,13 @@ NAVEGADORES_RUTAS = {
         "darwin": [os.path.expanduser("~/Library/Application Support/BraveSoftware/Brave-Browser")],
         "linux": [os.path.expanduser("~/.config/BraveSoftware/Brave-Browser")],
     },
+}
+
+NAVEGADORES_ARCHIVO_PERFIL = {
+    "chrome": PERFIL_CHROMIUM,
+    "edge": PERFIL_CHROMIUM,
+    "brave": PERFIL_CHROMIUM,
+    "firefox": PERFIL_FIREFOX,
 }
 
 PLATAFORMA_DOMINIOS = {
@@ -228,12 +238,44 @@ def es_youtube(url):
     return detectar_plataforma(url) == "YouTube"
 
 
+def _mtime_perfil(nombre, rutas):
+    archivo = NAVEGADORES_ARCHIVO_PERFIL.get(nombre)
+    if not archivo:
+        return 0.0
+    mejor = 0.0
+    for ruta in rutas:
+        if not os.path.isdir(ruta):
+            continue
+        try:
+            mtime = os.path.getmtime(os.path.join(ruta, archivo))
+        except OSError:
+            continue
+        if mtime > mejor:
+            mejor = mtime
+    return mejor
+
+
 def detectar_navegadores():
     detectados = []
     for nombre, rutas in NAVEGADORES_RUTAS.items():
-        if any(os.path.isdir(r) for r in rutas.get(sys.platform, [])):
-            detectados.append(nombre)
-    return detectados
+        rutas_so = rutas.get(sys.platform, [])
+        archivo = NAVEGADORES_ARCHIVO_PERFIL.get(nombre)
+        for ruta in rutas_so:
+            if not os.path.isdir(ruta):
+                continue
+            if archivo and not os.path.isfile(os.path.join(ruta, archivo)):
+                continue
+            detectados.append((nombre, _mtime_perfil(nombre, [ruta])))
+            break
+    detectados.sort(key=lambda par: (-par[1], _orden_navegador(par[0])))
+    return [nombre for nombre, _ in detectados]
+
+
+def _orden_navegador(nombre):
+    try:
+        return ORDEN_NAVEGADORES.index(nombre)
+    except ValueError:
+        return len(ORDEN_NAVEGADORES)
 
 
 def construir_opciones_cookies(navegador):
@@ -336,7 +378,7 @@ class ClasificadorErrores:
         "age_restricted": "Inicia sesion en tu navegador en la plataforma y activa 'Usar sesion del navegador'.",
         "geo": "Usa una red en la region permitida para este contenido.",
         "sign_in": "Inicia sesion en tu navegador en la plataforma y activa 'Usar sesion del navegador'.",
-        "bot": "Espera unos minutos y vuelve a intentarlo.",
+        "bot": "Espera unos minutos y vuelve a intentarlo. Si persiste, activa 'Usar sesion del navegador', inicia sesion en YouTube en ese navegador y reintenta.",
         "cookies": "Abre el navegador, inicia sesion en la plataforma y reintenta. Si el navegador esta en uso, cierra su gestor de contrasenas.",
         "not_found": "Verifica que la URL este completa y sea correcta.",
         "extractor": "Actualiza yt-dlp desde el Diagnostico o ejecuta: python -m pip install -U \"yt-dlp[default,curl-cffi]\". Si el error es de TikTok y persiste, activa 'Usar sesion del navegador' para pasar el challenge, o espera unos minutos (TikTok bloquea IPs temporalmente).",
@@ -434,14 +476,20 @@ def guardar_preferencias(prefs):
         pass
 
 
-def _opciones_base(navegador=None, cancel_flag=None):
+def _opciones_base(navegador=None, cancel_flag=None, impersonate=None, player_client=None):
     opciones = {
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
         "noplaylist": True,
         "socket_timeout": TIMEOUT_RED,
+        "sleep_interval_requests": 1,
+        "extractor_retries": 3,
     }
+    if impersonate:
+        opciones["impersonate"] = impersonate
+    if player_client:
+        opciones["extractor_args"] = {"youtube": {"player_client": [player_client]}}
     if cancel_flag is not None:
         def hook(d):
             if cancel_flag.is_set():
@@ -477,28 +525,56 @@ def extraer_info_video(url, navegador=None):
     return None
 
 
+CLIENTES_FALLBACK_BOT = ["tv", "web_embedded", "android_vr"]
+
+
+def _intentar_verificar(url, navegador, cancel_flag, impersonate=None, player_client=None):
+    opciones = _opciones_base(navegador, cancel_flag, impersonate=impersonate,
+                              player_client=player_client)
+    with yt_dlp.YoutubeDL(opciones) as ydl:
+        info = ydl.extract_info(url, download=False)
+        if not info:
+            return None, None
+        plataforma = detectar_plataforma(url)
+        restriccion = ClasificadorErrores.clasificar_availability(info.get("availability"), plataforma)
+        return info, restriccion
+
+
 def verificar_url(url, navegador=None, cancel_flag=None):
     resultado = {"reconocida": False, "info": None, "restriccion": None}
     if not url or not PLATFORM_REGEX.search(url):
         return resultado
     resultado["reconocida"] = True
+    es_yt = detectar_plataforma(url) == "YouTube"
     try:
-        opciones = _opciones_base(navegador, cancel_flag)
-        with yt_dlp.YoutubeDL(opciones) as ydl:
-            info = ydl.extract_info(url, download=False)
-            if not info:
-                return resultado
-            resultado["info"] = info
-            plataforma = detectar_plataforma(url)
-            restriccion = ClasificadorErrores.clasificar_availability(info.get("availability"), plataforma)
-            if restriccion:
-                resultado["restriccion"] = restriccion
-            return resultado
+        info, restriccion = _intentar_verificar(url, navegador, cancel_flag)
+        resultado["info"] = info
+        resultado["restriccion"] = restriccion
+        return resultado
     except DescargaCancelada:
         resultado["restriccion"] = {"tipo": "cancelada", "mensaje": "Verificacion cancelada", "sugerencia": None, "detalle": ""}
         return resultado
     except yt_dlp.utils.DownloadError as e:
-        resultado["restriccion"] = ClasificadorErrores.clasificar(e, detectar_plataforma(url))
+        restriccion = ClasificadorErrores.clasificar(e, detectar_plataforma(url))
+        if es_yt and restriccion.get("tipo") == "bot":
+            for cliente in CLIENTES_FALLBACK_BOT:
+                if cancel_flag is not None and cancel_flag.is_set():
+                    resultado["restriccion"] = {"tipo": "cancelada", "mensaje": "Verificacion cancelada", "sugerencia": None, "detalle": ""}
+                    return resultado
+                try:
+                    info, restr_alt = _intentar_verificar(url, navegador, cancel_flag,
+                                                          impersonate="chrome", player_client=cliente)
+                    resultado["info"] = info
+                    resultado["restriccion"] = restr_alt
+                    return resultado
+                except DescargaCancelada:
+                    resultado["restriccion"] = {"tipo": "cancelada", "mensaje": "Verificacion cancelada", "sugerencia": None, "detalle": ""}
+                    return resultado
+                except yt_dlp.utils.DownloadError:
+                    continue
+                except Exception:
+                    continue
+        resultado["restriccion"] = restriccion
         return resultado
     except Exception:
         return resultado
@@ -763,6 +839,7 @@ def _construir_opciones_descarga(url, carpeta, modo, calidad, subtitulos, playli
 
 def descargar_musica(url, carpeta, modo, calidad, subtitulos=False, playlist=False, progress_callback=None, speed_callback=None, navegador=None, cancel_flag=None, ydl_holder=None, postprocessor_callback=None, format_id=None, pista_label=None, tmpfile_callback=None):
     plataforma = detectar_plataforma(url)
+    es_yt = plataforma == "YouTube"
     try:
         os.makedirs(carpeta, exist_ok=True)
 
@@ -802,6 +879,13 @@ def descargar_musica(url, carpeta, modo, calidad, subtitulos=False, playlist=Fal
         return False, "Descarga cancelada", "cancelada"
     except yt_dlp.utils.DownloadError as e:
         clasificado = ClasificadorErrores.clasificar(e, plataforma)
+        if es_yt and not playlist and clasificado.get("tipo") == "bot":
+            return _descargar_fallback_bot(
+                url, carpeta, modo, calidad, subtitulos, playlist,
+                progress_callback, speed_callback, navegador, cancel_flag,
+                ydl_holder, postprocessor_callback, format_id, pista_label,
+                tmpfile_callback, clasificado,
+            )
         mensaje = clasificado["mensaje"]
         sugerencia = clasificado.get("sugerencia")
         if sugerencia:
@@ -819,6 +903,65 @@ def descargar_musica(url, carpeta, modo, calidad, subtitulos=False, playlist=Fal
                 mensaje += "\n\nDetalle tecnico:\n" + detalle
             return False, mensaje, None
         return False, clasificado["mensaje"], clasificado.get("tipo")
+
+
+def _descargar_fallback_bot(url, carpeta, modo, calidad, subtitulos, playlist,
+                            progress_callback, speed_callback, navegador, cancel_flag,
+                            ydl_holder, postprocessor_callback, format_id, pista_label,
+                            tmpfile_callback, clasificado_original):
+    for cliente in CLIENTES_FALLBACK_BOT:
+        if cancel_flag is not None and cancel_flag.is_set():
+            return False, "Descarga cancelada", "cancelada"
+        try:
+            os.makedirs(carpeta, exist_ok=True)
+
+            def _hook(d):
+                if d["status"] == "downloading" and speed_callback:
+                    downloaded = d.get("downloaded_bytes", 0)
+                    elapsed = d.get("elapsed", 0)
+                    speed = downloaded / elapsed if elapsed > 0 else 0
+                    total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+                    speed_callback(speed, downloaded, total)
+
+            opciones = _construir_opciones_descarga(
+                url, carpeta, modo, calidad, subtitulos, playlist,
+                progreso_callback=progress_callback, cancel_flag=cancel_flag,
+                postprocessor_callback=postprocessor_callback,
+                format_id=format_id, pista_label=pista_label,
+                tmpfile_callback=tmpfile_callback,
+            )
+            opciones.update(construir_opciones_cookies(navegador))
+            opciones["impersonate"] = "chrome"
+            opciones["extractor_args"] = {"youtube": {"player_client": [cliente]}}
+
+            hooks = opciones.get("progress_hooks", [])
+            if speed_callback:
+                hooks.append(_hook)
+            opciones["progress_hooks"] = hooks
+
+            with yt_dlp.YoutubeDL(opciones) as ydl:
+                if ydl_holder is not None and isinstance(ydl_holder, dict):
+                    ydl_holder["ydl"] = ydl
+                try:
+                    ydl.download([url])
+                finally:
+                    if ydl_holder is not None and isinstance(ydl_holder, dict):
+                        ydl_holder["ydl"] = None
+            return True, "Descarga completada", None
+        except DescargaCancelada:
+            return False, "Descarga cancelada", "cancelada"
+        except yt_dlp.utils.DownloadError:
+            continue
+        except Exception:
+            continue
+    mensaje = clasificado_original["mensaje"]
+    sugerencia = clasificado_original.get("sugerencia")
+    if sugerencia:
+        mensaje += "\n\nSugerencia:\n" + sugerencia
+    detalle = (clasificado_original.get("detalle") or "").strip()
+    if detalle:
+        mensaje += "\n\nDetalle tecnico:\n" + detalle
+    return False, mensaje, clasificado_original.get("tipo")
 
 
 def check_for_update(current_version):

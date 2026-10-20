@@ -29,6 +29,12 @@ from core import (
     descargar_musica,
 )
 from core import CALIDADES_AUDIO, CALIDADES_VIDEO
+from core import (
+    detectar_navegadores,
+    elegir_navegador_sesion,
+    ORDEN_NAVEGADORES,
+    CLIENTES_FALLBACK_BOT,
+)
 
 
 class TestDetectarPlataforma:
@@ -226,6 +232,116 @@ class TestOpcionesBaseAntiHang:
         opts = _opciones_base()
         assert opts.get("noplaylist") is True
 
+    def test_incluye_sleep_y_reintentos_extractor(self):
+        opts = _opciones_base()
+        assert opts.get("sleep_interval_requests") == 1
+        assert opts.get("extractor_retries") == 3
+
+    def test_impersonate_y_player_client_opcionales(self):
+        opts = _opciones_base(impersonate="chrome", player_client="tv")
+        assert opts.get("impersonate") == "chrome"
+        assert opts.get("extractor_args") == {"youtube": {"player_client": ["tv"]}}
+
+    def test_sin_impersonate_ni_player_client(self):
+        opts = _opciones_base()
+        assert "impersonate" not in opts
+        assert "extractor_args" not in opts
+
+
+class TestDeteccionNavegadores:
+    def _perfiles(self, tmp_path, perfiles):
+        raiz = tmp_path
+        for nombre, archivo in perfiles.items():
+            d = raiz / nombre
+            d.mkdir(parents=True, exist_ok=True)
+            (d / archivo).write_text("x")
+        return raiz
+
+    def test_ignora_carpeta_sin_archivo_perfil(self, monkeypatch, tmp_path):
+        raiz = tmp_path / "User Data"
+        raiz.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setitem(core.NAVEGADORES_RUTAS, "brave", {"linux": [str(raiz)]})
+        assert detectar_navegadores() == []
+
+    def test_detecta_con_archivo_perfil(self, monkeypatch, tmp_path):
+        raiz = self._perfiles(tmp_path, {"brave": "Local State"})
+        monkeypatch.setitem(core.NAVEGADORES_RUTAS, "brave", {"linux": [str(raiz / "brave")]})
+        assert "brave" in detectar_navegadores()
+
+    def test_ordena_por_mtime_mas_reciente(self, monkeypatch, tmp_path):
+        base = self._perfiles(tmp_path, {"brave": "Local State", "firefox": "profiles.ini"})
+        monkeypatch.setitem(core.NAVEGADORES_RUTAS, "brave", {"linux": [str(base / "brave")]})
+        monkeypatch.setitem(core.NAVEGADORES_RUTAS, "firefox", {"linux": [str(base / "firefox")]})
+        os.utime(base / "firefox" / "profiles.ini", (2000, 2000))
+        os.utime(base / "brave" / "Local State", (1000, 1000))
+        assert detectar_navegadores() == ["firefox", "brave"]
+
+    def test_desempate_por_orden_preferido(self, monkeypatch, tmp_path):
+        base = self._perfiles(tmp_path, {"brave": "Local State", "firefox": "profiles.ini"})
+        monkeypatch.setitem(core.NAVEGADORES_RUTAS, "brave", {"linux": [str(base / "brave")]})
+        monkeypatch.setitem(core.NAVEGADORES_RUTAS, "firefox", {"linux": [str(base / "firefox")]})
+        os.utime(base / "firefox" / "profiles.ini", (1000, 1000))
+        os.utime(base / "brave" / "Local State", (1000, 1000))
+        assert detectar_navegadores() == ["brave", "firefox"]
+
+
+class TestElegirNavegadorSesion:
+    def test_respeta_pref_guardada(self, monkeypatch):
+        monkeypatch.setattr(core, "detectar_navegadores", lambda: ["brave", "firefox"])
+        assert elegir_navegador_sesion("firefox") == "firefox"
+
+    def test_pref_invalida_usa_el_primero(self, monkeypatch):
+        monkeypatch.setattr(core, "detectar_navegadores", lambda: ["brave", "firefox"])
+        assert elegir_navegador_sesion("edge") == "brave"
+
+    def test_sin_navegadores_devuelve_vacio(self, monkeypatch):
+        monkeypatch.setattr(core, "detectar_navegadores", lambda: [])
+        assert elegir_navegador_sesion("brave") == ""
+
+    def test_orden_preferido_brave_primero(self):
+        assert ORDEN_NAVEGADORES[0] == "brave"
+        assert ORDEN_NAVEGADORES.index("brave") < ORDEN_NAVEGADORES.index("edge")
+
+
+class TestFallbackBot:
+    def test_orden_clientes_fallback(self):
+        assert CLIENTES_FALLBACK_BOT == ["tv", "web_embedded", "android_vr"]
+
+    def test_reintenta_con_clientes_y_impersonate(self, monkeypatch):
+        import core as core_mod
+        intentos = []
+
+        def fake_verificar(url, navegador, cancel_flag, impersonate=None, player_client=None):
+            intentos.append((impersonate, player_client))
+            if player_client == "web_embedded":
+                return {"title": "ok"}, None
+            raise core_mod.yt_dlp.utils.DownloadError("Sign in to confirm you're not a bot")
+
+        monkeypatch.setattr(core_mod, "_intentar_verificar", fake_verificar)
+        r = verificar_url("https://youtu.be/x")
+        assert r["info"] == {"title": "ok"}
+        assert ("chrome", "tv") in intentos
+        assert ("chrome", "web_embedded") in intentos
+
+    def test_cancel_flag_detiene_fallback(self, monkeypatch):
+        import core as core_mod
+        flag = threading.Event()
+        intentos = []
+
+        def fake_verificar(url, navegador, cancel_flag, impersonate=None, player_client=None):
+            intentos.append(player_client)
+            flag.set()
+            raise core_mod.yt_dlp.utils.DownloadError("Sign in to confirm you're not a bot")
+
+        monkeypatch.setattr(core_mod, "_intentar_verificar", fake_verificar)
+        r = verificar_url("https://youtu.be/x", cancel_flag=flag)
+        assert intentos == [None]
+        assert r["restriccion"]["tipo"] == "cancelada"
+
+    def test_sugerencia_bot_menciona_sesion(self):
+        sugerencia = ClasificadorErrores.SUGERENCIAS.get("bot", "")
+        assert "sesion" in sugerencia.lower() or "sesión" in sugerencia.lower()
+
 
 class TestCancelacionPostproceso:
     def test_postprocessor_hook_aborta_cuando_flag_activo(self):
@@ -392,7 +508,7 @@ class TestVerificarUrlCancel:
         import core as core_mod
         from core import DescargaCancelada as DC
 
-        def fake_opciones(nav=None, cancel_flag=None):
+        def fake_opciones(nav=None, cancel_flag=None, **kwargs):
             return {}
 
         class FakeYDL:
