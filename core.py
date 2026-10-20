@@ -123,9 +123,9 @@ TIPOS_REINTENTO_SESION = {"private", "members_only", "age_restricted", "sign_in"
 
 TIPOS_CUENTA = {"private", "members_only", "age_restricted", "sign_in"}
 
-ORDEN_NAVEGADORES = ["brave", "firefox", "chrome", "edge"]
+ORDEN_NAVEGADORES = ["zen", "firefox", "waterfox", "librewolf", "brave", "vivaldi", "opera", "chrome", "edge"]
 
-NAVEGADORES_COMPATIBLES_ABIERTOS = ["firefox"]
+NAVEGADORES_COMPATIBLES_ABIERTOS = ["zen", "firefox", "waterfox", "librewolf"]
 
 PERFIL_CHROMIUM = "Local State"
 PERFIL_FIREFOX = "profiles.ini"
@@ -151,13 +151,50 @@ NAVEGADORES_RUTAS = {
         "darwin": [os.path.expanduser("~/Library/Application Support/BraveSoftware/Brave-Browser")],
         "linux": [os.path.expanduser("~/.config/BraveSoftware/Brave-Browser")],
     },
+    "zen": {
+        "win32": [os.path.join(os.environ.get("APPDATA", ""), "zen")],
+        "darwin": [os.path.expanduser("~/Library/Application Support/zen")],
+        "linux": [os.path.expanduser("~/.zen"), os.path.expanduser("~/.var/app/app.zen_browser.zen/.zen")],
+    },
+    "vivaldi": {
+        "win32": [os.path.join(os.environ.get("LOCALAPPDATA", ""), "Vivaldi", "User Data")],
+        "darwin": [os.path.expanduser("~/Library/Application Support/Vivaldi")],
+        "linux": [os.path.expanduser("~/.config/vivaldi")],
+    },
+    "opera": {
+        "win32": [os.path.join(os.environ.get("APPDATA", ""), "Opera Software", "Opera Stable")],
+        "darwin": [os.path.expanduser("~/Library/Application Support/com.operasoftware.Opera")],
+        "linux": [os.path.expanduser("~/.config/opera")],
+    },
+    "waterfox": {
+        "win32": [os.path.join(os.environ.get("APPDATA", ""), "Waterfox")],
+        "darwin": [os.path.expanduser("~/Library/Application Support/Waterfox")],
+        "linux": [os.path.expanduser("~/.waterfox")],
+    },
+    "librewolf": {
+        "win32": [os.path.join(os.environ.get("APPDATA", ""), "librewolf")],
+        "darwin": [os.path.expanduser("~/Library/Application Support/librewolf")],
+        "linux": [
+            os.path.expanduser("~/.librewolf"),
+            os.path.expanduser("~/.var/app/io.gitlab.librewolf-community/.librewolf"),
+        ],
+    },
 }
+
+# Navegadores Gecko (Firefox y forks) que yt-dlp no conoce por nombre:
+# se leen pasando ("firefox", <ruta_perfil>, None, None).
+NAVEGADORES_GECKO = {"firefox", "zen", "waterfox", "librewolf"}
 
 NAVEGADORES_ARCHIVO_PERFIL = {
     "chrome": PERFIL_CHROMIUM,
     "edge": PERFIL_CHROMIUM,
     "brave": PERFIL_CHROMIUM,
+    "vivaldi": PERFIL_CHROMIUM,
+    "opera": PERFIL_CHROMIUM,
     "firefox": PERFIL_FIREFOX,
+    "zen": PERFIL_FIREFOX,
+    "waterfox": PERFIL_FIREFOX,
+    "librewolf": PERFIL_FIREFOX,
 }
 
 PLATAFORMA_DOMINIOS = {
@@ -258,6 +295,66 @@ def _mtime_perfil(nombre, rutas):
     return mejor
 
 
+def _leer_profiles_ini(ruta_ini):
+    dicts = {}
+    seccion = None
+    try:
+        with open(ruta_ini, "r", encoding="utf-8", errors="ignore") as f:
+            for linea in f:
+                linea = linea.strip()
+                if not linea or linea.startswith(";"):
+                    continue
+                if linea.startswith("[") and linea.endswith("]"):
+                    seccion = linea[1:-1]
+                    dicts[seccion] = {}
+                elif seccion and "=" in linea:
+                    clave, _, valor = linea.partition("=")
+                    dicts[seccion][clave.strip()] = valor.strip()
+    except OSError:
+        return {}
+    return dicts
+
+
+def _candidatos_perfil_gecko(raiz):
+    rutas = []
+    ini = os.path.join(raiz, "profiles.ini")
+    if os.path.isfile(ini):
+        for seccion, datos in _leer_profiles_ini(ini).items():
+            if not seccion.startswith("Profile"):
+                continue
+            ruta = datos.get("Path")
+            if not ruta:
+                continue
+            if datos.get("IsRelative", "1") == "1":
+                ruta = os.path.join(raiz, ruta)
+            rutas.append(ruta)
+    for sub in ("Profiles", ""):
+        base = os.path.join(raiz, sub) if sub else raiz
+        if os.path.isdir(base):
+            try:
+                rutas.extend(os.path.join(base, n) for n in os.listdir(base))
+            except OSError:
+                pass
+    return rutas
+
+
+def perfil_gecko(navegador):
+    rutas = NAVEGADORES_RUTAS.get(navegador, {}).get(sys.platform, [])
+    mejor, mejor_ts = "", -1.0
+    for raiz in rutas:
+        if not os.path.isdir(raiz):
+            continue
+        for candidato in _candidatos_perfil_gecko(raiz):
+            db = os.path.join(candidato, "cookies.sqlite")
+            try:
+                ts = os.path.getmtime(db)
+            except OSError:
+                continue
+            if ts > mejor_ts:
+                mejor, mejor_ts = candidato, ts
+    return mejor
+
+
 def detectar_navegadores():
     detectados = []
     for nombre, rutas in NAVEGADORES_RUTAS.items():
@@ -281,8 +378,26 @@ def _orden_navegador(nombre):
         return len(ORDEN_NAVEGADORES)
 
 
+def navegadores_cacheados(prefs=None):
+    if prefs is None:
+        prefs = cargar_preferencias()
+    cache = prefs.get("navegadores_detectados")
+    if isinstance(cache, list) and cache:
+        return [n for n in cache if n in NAVEGADORES_RUTAS]
+    detectados = detectar_navegadores()
+    if detectados:
+        prefs["navegadores_detectados"] = detectados
+        guardar_preferencias(prefs)
+    return detectados
+
+
 def construir_opciones_cookies(navegador):
     if not navegador:
+        return {}
+    if navegador in NAVEGADORES_GECKO and navegador != "firefox":
+        perfil = perfil_gecko(navegador)
+        if perfil:
+            return {"cookiesfrombrowser": ("firefox", perfil, None, None)}
         return {}
     return {"cookiesfrombrowser": (navegador, None, None, None)}
 
@@ -381,8 +496,8 @@ class ClasificadorErrores:
         "age_restricted": "Inicia sesion en tu navegador en la plataforma y activa 'Usar sesion del navegador'.",
         "geo": "Usa una red en la region permitida para este contenido.",
         "sign_in": "Inicia sesion en tu navegador en la plataforma y activa 'Usar sesion del navegador'.",
-        "bot": "Espera unos minutos y vuelve a intentarlo. Si persiste, activa 'Usar sesion del navegador', inicia sesion en YouTube en ese navegador y reintenta.",
-        "cookies": "El navegador tiene bloqueada su base de datos de cookies (Chrome/Edge/Brave lo hacen si estan abiertos). Firefox no necesita cerrarse, asi que la app lo probara primero automaticamente. Si con ningun navegador funciona, cierra el navegador por completo (revisa el Administrador de tareas: hay procesos en segundo plano) y reintenta.",
+        "bot": "Espera unos minutos y reintenta. La app ya probo automaticamente todos los navegadores detectados; si ninguno funciono, abre la plataforma en tu navegador (donde tengas la sesion iniciada), activa 'Usar sesion del navegador' y reintenta.",
+        "cookies": "El navegador tiene bloqueada su base de datos de cookies (Chrome/Edge/Brave/Vivaldi lo hacen si estan abiertos o por cifrado DPAPI en Windows). La app prueba automaticamente todos los navegadores detectados en orden (primero los Gecko: Firefox/Zen/Waterfox/LibreWolf, que se leen sin cerrarlos). Si con ninguno funciona, cierra el navegador por completo (revisa el Administrador de tareas: hay procesos en segundo plano) y reintenta.",
         "not_found": "Verifica que la URL este completa y sea correcta.",
         "extractor": "Actualiza yt-dlp desde el Diagnostico o ejecuta: python -m pip install -U \"yt-dlp[default,curl-cffi]\". Si el error es de TikTok y persiste, activa 'Usar sesion del navegador' para pasar el challenge, o espera unos minutos (TikTok bloquea IPs temporalmente).",
         "formato": "Actualiza yt-dlp e intenta de nuevo; tambien puedes cambiar la calidad seleccionada.",
@@ -450,6 +565,7 @@ def cargar_preferencias():
         "clipboard_auto": True,
         "usar_sesion_navegador": False,
         "navegador": "",
+        "navegadores_detectados": [],
         "max_paralelas": 1,
         "ocultar_urls": True,
         "actualizar_automaticamente": "preguntar",
@@ -545,6 +661,10 @@ def _intentar_verificar(url, navegador, cancel_flag, impersonate=None, player_cl
         return info, restriccion
 
 
+def _verificar_cancelada():
+    return {"tipo": "cancelada", "mensaje": "Verificacion cancelada", "sugerencia": None, "detalle": ""}
+
+
 def verificar_url(url, navegador=None, cancel_flag=None):
     resultado = {"reconocida": False, "info": None, "restriccion": None}
     if not url or not PLATFORM_REGEX.search(url):
@@ -557,23 +677,24 @@ def verificar_url(url, navegador=None, cancel_flag=None):
         resultado["restriccion"] = restriccion
         return resultado
     except DescargaCancelada:
-        resultado["restriccion"] = {"tipo": "cancelada", "mensaje": "Verificacion cancelada", "sugerencia": None, "detalle": ""}
+        resultado["restriccion"] = _verificar_cancelada()
         return resultado
     except yt_dlp.utils.DownloadError as e:
         restriccion = ClasificadorErrores.clasificar(e, detectar_plataforma(url))
-        if es_yt and restriccion.get("tipo") == "bot":
-            for cliente in CLIENTES_FALLBACK_BOT:
+        if es_yt and restriccion.get("tipo") in ("bot", "cookies"):
+            for intento in _intentos_fallback_verificacion(navegador):
                 if cancel_flag is not None and cancel_flag.is_set():
-                    resultado["restriccion"] = {"tipo": "cancelada", "mensaje": "Verificacion cancelada", "sugerencia": None, "detalle": ""}
+                    resultado["restriccion"] = _verificar_cancelada()
                     return resultado
                 try:
-                    info, restr_alt = _intentar_verificar(url, navegador, cancel_flag,
-                                                          impersonate="chrome", player_client=cliente)
+                    info, restr_alt = _intentar_verificar(url, intento["navegador"], cancel_flag,
+                                                          impersonate=intento.get("impersonate"),
+                                                          player_client=intento.get("cliente"))
                     resultado["info"] = info
                     resultado["restriccion"] = restr_alt
                     return resultado
                 except DescargaCancelada:
-                    resultado["restriccion"] = {"tipo": "cancelada", "mensaje": "Verificacion cancelada", "sugerencia": None, "detalle": ""}
+                    resultado["restriccion"] = _verificar_cancelada()
                     return resultado
                 except yt_dlp.utils.DownloadError:
                     continue
@@ -583,6 +704,17 @@ def verificar_url(url, navegador=None, cancel_flag=None):
         return resultado
     except Exception:
         return resultado
+
+
+def _intentos_fallback_verificacion(navegador):
+    intentos = []
+    for cliente in CLIENTES_FALLBACK_BOT:
+        intentos.append({"navegador": navegador, "impersonate": "chrome", "cliente": cliente})
+    for nav in navegadores_para_reintento(navegador or ""):
+        if nav == navegador:
+            continue
+        intentos.append({"navegador": nav})
+    return intentos
 
 
 def _mismo_idioma(a, b):
@@ -914,7 +1046,8 @@ def _descargar_fallback_bot(url, carpeta, modo, calidad, subtitulos, playlist,
                             progress_callback, speed_callback, navegador, cancel_flag,
                             ydl_holder, postprocessor_callback, format_id, pista_label,
                             tmpfile_callback, clasificado_original):
-    for cliente in CLIENTES_FALLBACK_BOT:
+    ultimo_clasificado = clasificado_original
+    for intento in _intentos_fallback_descarga(navegador):
         if cancel_flag is not None and cancel_flag.is_set():
             return False, "Descarga cancelada", "cancelada"
         try:
@@ -935,9 +1068,12 @@ def _descargar_fallback_bot(url, carpeta, modo, calidad, subtitulos, playlist,
                 format_id=format_id, pista_label=pista_label,
                 tmpfile_callback=tmpfile_callback,
             )
-            opciones.update(construir_opciones_cookies(navegador))
-            opciones["impersonate"] = "chrome"
-            opciones["extractor_args"] = {"youtube": {"player_client": [cliente]}}
+            navegador_intento = intento.get("navegador")
+            opciones.update(construir_opciones_cookies(navegador_intento))
+            if intento.get("impersonate"):
+                opciones["impersonate"] = intento["impersonate"]
+            if intento.get("cliente"):
+                opciones["extractor_args"] = {"youtube": {"player_client": [intento["cliente"]]}}
 
             hooks = opciones.get("progress_hooks", [])
             if speed_callback:
@@ -955,18 +1091,32 @@ def _descargar_fallback_bot(url, carpeta, modo, calidad, subtitulos, playlist,
             return True, "Descarga completada", None
         except DescargaCancelada:
             return False, "Descarga cancelada", "cancelada"
-        except yt_dlp.utils.DownloadError:
+        except yt_dlp.utils.DownloadError as e:
+            ultimo_clasificado = ClasificadorErrores.clasificar(e, detectar_plataforma(url))
             continue
-        except Exception:
+        except Exception as e:
+            clasificado = ClasificadorErrores.clasificar(e, detectar_plataforma(url))
+            if clasificado.get("tipo") != "desconocido":
+                ultimo_clasificado = clasificado
             continue
-    mensaje = clasificado_original["mensaje"]
-    sugerencia = clasificado_original.get("sugerencia")
+    mensaje = ultimo_clasificado["mensaje"]
+    sugerencia = ultimo_clasificado.get("sugerencia")
     if sugerencia:
         mensaje += "\n\nSugerencia:\n" + sugerencia
-    detalle = (clasificado_original.get("detalle") or "").strip()
+    detalle = (ultimo_clasificado.get("detalle") or "").strip()
     if detalle:
         mensaje += "\n\nDetalle tecnico:\n" + detalle
-    return False, mensaje, clasificado_original.get("tipo")
+    return False, mensaje, ultimo_clasificado.get("tipo")
+
+
+def _intentos_fallback_descarga(navegador):
+    intentos = [{"navegador": navegador, "impersonate": "chrome", "cliente": cliente}
+                for cliente in CLIENTES_FALLBACK_BOT]
+    for nav in navegadores_para_reintento(navegador or ""):
+        if nav == navegador:
+            continue
+        intentos.append({"navegador": nav})
+    return intentos
 
 
 def check_for_update(current_version):

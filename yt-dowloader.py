@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-__version__ = "3.7.2"
+__version__ = "3.7.3"
 
 import os
 import subprocess
@@ -23,6 +23,7 @@ from core import (
     find_ffmpeg,
     detectar_plataforma,
     detectar_navegadores,
+    navegadores_cacheados,
     cargar_preferencias,
     guardar_preferencias,
     verificar_url,
@@ -1173,7 +1174,7 @@ class App(ctk.CTk):
         self._url_valida = False
         self._clipboard_job = None
         self.ffmpeg_ok = find_ffmpeg() is not None
-        self.navegadores = detectar_navegadores()
+        self.navegadores = navegadores_cacheados(self.prefs)
         self.queue_items = []
         self._pistas_gen = 0
         self._pistas_url_actual = ""
@@ -2534,8 +2535,7 @@ class App(ctk.CTk):
             self.annunciador.notify("info", "Descarga cancelada")
             return
 
-        if not exito and (tipo_fallo in TIPOS_CUENTA or tipo_fallo == "cookies") and (
-                not navegador_actual or tipo_fallo == "cookies"):
+        if not exito and tipo_fallo in (set(TIPOS_CUENTA) | {"cookies"}):
             candidatos = navegadores_para_reintento(self._navegador_preferido(), self.navegadores)
             if navegador_actual:
                 candidatos = [n for n in candidatos if n != navegador_actual]

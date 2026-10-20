@@ -298,7 +298,91 @@ class TestDeteccionNavegadores:
         monkeypatch.setitem(core.NAVEGADORES_RUTAS, "firefox", {"linux": [str(base / "firefox")]})
         os.utime(base / "firefox" / "profiles.ini", (1000, 1000))
         os.utime(base / "brave" / "Local State", (1000, 1000))
-        assert detectar_navegadores() == ["brave", "firefox"]
+        assert detectar_navegadores() == ["firefox", "brave"]
+
+
+class TestRutasNavegadores:
+    def test_fork_gecko_tiene_rutas_en_los_tres_so(self):
+        for nav in ("zen", "waterfox", "librewolf", "firefox"):
+            rutas = core.NAVEGADORES_RUTAS[nav]
+            assert rutas.get("win32") and rutas.get("darwin") and rutas.get("linux")
+
+    def test_chromium_incluye_vivaldi_y_opera(self):
+        for nav in ("vivaldi", "opera", "brave", "chrome", "edge"):
+            rutas = core.NAVEGADORES_RUTAS[nav]
+            assert rutas.get("win32") and rutas.get("darwin") and rutas.get("linux")
+
+    def test_archivo_perfil_por_navegador(self):
+        for nav in ("zen", "waterfox", "librewolf", "firefox"):
+            assert core.NAVEGADORES_ARCHIVO_PERFIL[nav] == core.PERFIL_FIREFOX
+        for nav in ("vivaldi", "opera", "brave", "chrome", "edge"):
+            assert core.NAVEGADORES_ARCHIVO_PERFIL[nav] == core.PERFIL_CHROMIUM
+
+    def test_navegadores_gecko(self):
+        assert core.NAVEGADORES_GECKO == {"firefox", "zen", "waterfox", "librewolf"}
+
+
+class TestPerfilGecko:
+    def test_encuentra_perfil_con_cookies_mas_reciente(self, monkeypatch, tmp_path):
+        raiz = tmp_path / "zen"
+        (raiz / "Profiles" / "abc.default").mkdir(parents=True)
+        (raiz / "Profiles" / "xyz.Default (release)").mkdir(parents=True)
+        ini = raiz / "profiles.ini"
+        ini.write_text(
+            "[Profile0]\nName=default\nIsRelative=1\nPath=Profiles/abc.default\n\n"
+            "[Profile1]\nName=Default (release)\nIsRelative=1\nPath=Profiles/xyz.Default (release)\n"
+        )
+        viejo = raiz / "Profiles" / "abc.default" / "cookies.sqlite"
+        nuevo = raiz / "Profiles" / "xyz.Default (release)" / "cookies.sqlite"
+        viejo.write_text("x")
+        nuevo.write_text("x")
+        os.utime(viejo, (1000, 1000))
+        os.utime(nuevo, (2000, 2000))
+        monkeypatch.setitem(core.NAVEGADORES_RUTAS, "zen", {"linux": [str(raiz)]})
+        assert core.perfil_gecko("zen") == str(nuevo.parent)
+
+    def test_sin_perfiles_devuelve_vacio(self, monkeypatch, tmp_path):
+        raiz = tmp_path / "zen"
+        raiz.mkdir()
+        monkeypatch.setitem(core.NAVEGADORES_RUTAS, "zen", {"linux": [str(raiz)]})
+        assert core.perfil_gecko("zen") == ""
+
+    def test_ignora_perfil_sin_cookies(self, monkeypatch, tmp_path):
+        raiz = tmp_path / "librewolf"
+        (raiz / "Profiles" / "p1").mkdir(parents=True)
+        monkeypatch.setitem(core.NAVEGADORES_RUTAS, "librewolf", {"linux": [str(raiz)]})
+        assert core.perfil_gecko("librewolf") == ""
+
+
+class TestConstruirOpcionesCookies:
+    def test_sin_navegador_sin_cookies(self):
+        assert core.construir_opciones_cookies("") == {}
+        assert core.construir_opciones_cookies(None) == {}
+
+    def test_chromium_por_nombre(self):
+        assert core.construir_opciones_cookies("brave") == {
+            "cookiesfrombrowser": ("brave", None, None, None)}
+        assert core.construir_opciones_cookies("vivaldi") == {
+            "cookiesfrombrowser": ("vivaldi", None, None, None)}
+
+    def test_firefox_por_nombre(self):
+        assert core.construir_opciones_cookies("firefox") == {
+            "cookiesfrombrowser": ("firefox", None, None, None)}
+
+    def test_fork_gecko_usa_firefox_con_perfil(self, monkeypatch, tmp_path):
+        raiz = tmp_path / "zen"
+        (raiz / "Profiles" / "p").mkdir(parents=True)
+        db = raiz / "Profiles" / "p" / "cookies.sqlite"
+        db.write_text("x")
+        monkeypatch.setitem(core.NAVEGADORES_RUTAS, "zen", {"linux": [str(raiz)]})
+        assert core.construir_opciones_cookies("zen") == {
+            "cookiesfrombrowser": ("firefox", str(db.parent), None, None)}
+
+    def test_fork_gecko_sin_perfil_no_pone_cookies(self, monkeypatch, tmp_path):
+        raiz = tmp_path / "zen"
+        raiz.mkdir()
+        monkeypatch.setitem(core.NAVEGADORES_RUTAS, "zen", {"linux": [str(raiz)]})
+        assert core.construir_opciones_cookies("zen") == {}
 
 
 class TestElegirNavegadorSesion:
@@ -308,15 +392,15 @@ class TestElegirNavegadorSesion:
 
     def test_pref_invalida_usa_el_primero(self, monkeypatch):
         monkeypatch.setattr(core, "detectar_navegadores", lambda: ["brave", "firefox"])
-        assert elegir_navegador_sesion("edge") == "brave"
+        assert elegir_navegador_sesion("edge") == "firefox"
 
     def test_sin_navegadores_devuelve_vacio(self, monkeypatch):
         monkeypatch.setattr(core, "detectar_navegadores", lambda: [])
         assert elegir_navegador_sesion("brave") == ""
 
-    def test_orden_preferido_brave_primero(self):
-        assert ORDEN_NAVEGADORES[0] == "brave"
-        assert ORDEN_NAVEGADORES.index("brave") < ORDEN_NAVEGADORES.index("edge")
+    def test_orden_preferido_gecko_primero(self):
+        assert ORDEN_NAVEGADORES[0] == "zen"
+        assert ORDEN_NAVEGADORES.index("firefox") < ORDEN_NAVEGADORES.index("brave")
 
 
 class TestNavegadoresParaReintento:
@@ -352,8 +436,10 @@ class TestTiposCuenta:
         assert "bot" not in core.TIPOS_CUENTA
         assert "cookies" not in core.TIPOS_CUENTA
 
-    def test_firefox_compatible_abierto(self):
-        assert core.NAVEGADORES_COMPATIBLES_ABIERTOS == ["firefox"]
+    def test_gecko_compatibles_abiertos(self):
+        assert "zen" in core.NAVEGADORES_COMPATIBLES_ABIERTOS
+        assert "firefox" in core.NAVEGADORES_COMPATIBLES_ABIERTOS
+        assert "brave" not in core.NAVEGADORES_COMPATIBLES_ABIERTOS
 
 
 class TestFallbackBotSinCookies:
@@ -375,6 +461,7 @@ class TestFallbackBotSinCookies:
                 raise core_mod.yt_dlp.utils.DownloadError("still bot")
 
         monkeypatch.setattr(core_mod.yt_dlp, "YoutubeDL", FakeYDL)
+        monkeypatch.setattr(core_mod, "navegadores_para_reintento", lambda *a, **k: [])
         clasificado = {"mensaje": "bot", "sugerencia": "s", "detalle": "", "tipo": "bot"}
         core_mod._descargar_fallback_bot(
             "https://youtu.be/x", "/tmp/out", "audio", "320", False, False,
@@ -398,6 +485,36 @@ class TestFallbackBotSinCookies:
 class TestFallbackBot:
     def test_orden_clientes_fallback(self):
         assert CLIENTES_FALLBACK_BOT == ["tv", "web_embedded", "android_vr"]
+
+    def test_verificar_prueba_navegadores_tras_bot(self, monkeypatch):
+        import core as core_mod
+        intentos = []
+
+        def fake_verificar(url, navegador, cancel_flag, impersonate=None, player_client=None):
+            intentos.append(navegador)
+            if navegador == "zen":
+                return {"title": "ok"}, None
+            raise core_mod.yt_dlp.utils.DownloadError("Sign in to confirm you're not a bot")
+
+        monkeypatch.setattr(core_mod, "_intentar_verificar", fake_verificar)
+        monkeypatch.setattr(core_mod, "navegadores_para_reintento", lambda *a, **k: ["zen", "firefox"])
+        r = verificar_url("https://youtu.be/x", navegador="brave")
+        assert r["info"] == {"title": "ok"}
+        assert "zen" in intentos
+
+    def test_verificar_no_prueba_navegadores_si_ok(self, monkeypatch):
+        import core as core_mod
+        intentos = []
+
+        def fake_verificar(url, navegador, cancel_flag, impersonate=None, player_client=None):
+            intentos.append(navegador)
+            return {"title": "ok"}, None
+
+        monkeypatch.setattr(core_mod, "_intentar_verificar", fake_verificar)
+        monkeypatch.setattr(core_mod, "navegadores_para_reintento", lambda *a, **k: ["zen"])
+        r = verificar_url("https://youtu.be/x", navegador="brave")
+        assert r["info"] == {"title": "ok"}
+        assert intentos == ["brave"]
 
     def test_reintenta_con_clientes_y_impersonate(self, monkeypatch):
         import core as core_mod
