@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-__version__ = "3.7.1"
+__version__ = "3.7.2"
 
 import os
 import subprocess
@@ -19,6 +19,7 @@ from core import (
     PLATAFORMAS_CONFIG,
     TIPOS_BLOQUEANTES,
     TIPOS_REINTENTO_SESION,
+    TIPOS_CUENTA,
     find_ffmpeg,
     detectar_plataforma,
     detectar_navegadores,
@@ -758,19 +759,21 @@ class VentanaDiagnostico(ctk.CTkToplevel):
 
         resultado = verificar_url(self.url, self.navegador)
         restriccion = resultado.get("restriccion")
-        if restriccion and restriccion.get("tipo") in TIPOS_REINTENTO_SESION and (
-                not self.navegador or restriccion.get("tipo") == "cookies"):
-            candidatos = navegadores_para_reintento(self.navegador_pref, navegadores)
-            if self.navegador:
-                candidatos = [n for n in candidatos if n != self.navegador]
-            for nav in candidatos:
-                self._set("acceso", f"Reintentando con {nav.capitalize()}…", COLORS["accent.progress"])
-                resultado = verificar_url(self.url, nav)
-                restriccion = resultado.get("restriccion")
-                if not restriccion or restriccion.get("tipo") not in TIPOS_REINTENTO_SESION:
-                    break
-                if restriccion.get("tipo") != "cookies":
-                    break
+        tipo_restr = restriccion.get("tipo") if restriccion else None
+        if tipo_restr in TIPOS_CUENTA or tipo_restr == "cookies":
+            if not self.navegador or tipo_restr == "cookies":
+                candidatos = navegadores_para_reintento(self.navegador_pref, navegadores)
+                if self.navegador:
+                    candidatos = [n for n in candidatos if n != self.navegador]
+                for nav in candidatos:
+                    self._set("acceso", f"Reintentando con {nav.capitalize()}…", COLORS["accent.progress"])
+                    resultado = verificar_url(self.url, nav)
+                    restriccion = resultado.get("restriccion")
+                    tipo_restr = restriccion.get("tipo") if restriccion else None
+                    if tipo_restr not in TIPOS_CUENTA and tipo_restr != "cookies":
+                        break
+                    if tipo_restr != "cookies":
+                        break
         if restriccion:
             self._set("acceso", "RESTRINGIDO · " + restriccion["tipo"], COLORS["accent.error"])
             texto = restriccion["mensaje"]
@@ -2531,7 +2534,7 @@ class App(ctk.CTk):
             self.annunciador.notify("info", "Descarga cancelada")
             return
 
-        if not exito and tipo_fallo in TIPOS_REINTENTO_SESION and (
+        if not exito and (tipo_fallo in TIPOS_CUENTA or tipo_fallo == "cookies") and (
                 not navegador_actual or tipo_fallo == "cookies"):
             candidatos = navegadores_para_reintento(self._navegador_preferido(), self.navegadores)
             if navegador_actual:

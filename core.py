@@ -121,7 +121,11 @@ TIMEOUT_RED = 20
 
 TIPOS_REINTENTO_SESION = {"private", "members_only", "age_restricted", "sign_in", "cookies", "bot"}
 
+TIPOS_CUENTA = {"private", "members_only", "age_restricted", "sign_in"}
+
 ORDEN_NAVEGADORES = ["brave", "firefox", "chrome", "edge"]
+
+NAVEGADORES_COMPATIBLES_ABIERTOS = ["firefox"]
 
 PERFIL_CHROMIUM = "Local State"
 PERFIL_FIREFOX = "profiles.ini"
@@ -378,7 +382,7 @@ class ClasificadorErrores:
         "geo": "Usa una red en la region permitida para este contenido.",
         "sign_in": "Inicia sesion en tu navegador en la plataforma y activa 'Usar sesion del navegador'.",
         "bot": "Espera unos minutos y vuelve a intentarlo. Si persiste, activa 'Usar sesion del navegador', inicia sesion en YouTube en ese navegador y reintenta.",
-        "cookies": "El navegador tiene bloqueada su base de datos de cookies (suele pasar si esta abierto o si su gestor de contrasenas lo impide). Cierra el navegador por completo (revisa el Administrador de tareas: Chrome/Edge/Brave dejan procesos en segundo plano) y reintenta. Si persiste, prueba con otro navegador detectado o exporta las cookies a un archivo.",
+        "cookies": "El navegador tiene bloqueada su base de datos de cookies (Chrome/Edge/Brave lo hacen si estan abiertos). Firefox no necesita cerrarse, asi que la app lo probara primero automaticamente. Si con ningun navegador funciona, cierra el navegador por completo (revisa el Administrador de tareas: hay procesos en segundo plano) y reintenta.",
         "not_found": "Verifica que la URL este completa y sea correcta.",
         "extractor": "Actualiza yt-dlp desde el Diagnostico o ejecuta: python -m pip install -U \"yt-dlp[default,curl-cffi]\". Si el error es de TikTok y persiste, activa 'Usar sesion del navegador' para pasar el challenge, o espera unos minutos (TikTok bloquea IPs temporalmente).",
         "formato": "Actualiza yt-dlp e intenta de nuevo; tambien puedes cambiar la calidad seleccionada.",
@@ -1233,6 +1237,10 @@ def navegadores_para_reintento(pref_navegador="", detectados=None):
     orden = []
     if pref_navegador in detectados:
         orden.append(pref_navegador)
+    else:
+        for nav in NAVEGADORES_COMPATIBLES_ABIERTOS:
+            if nav in detectados and nav not in orden:
+                orden.append(nav)
     for nav in detectados:
         if nav not in orden:
             orden.append(nav)

@@ -320,15 +320,21 @@ class TestElegirNavegadorSesion:
 
 
 class TestNavegadoresParaReintento:
-    def test_devuelve_todos_los_detectados(self):
-        assert navegadores_para_reintento("", ["brave", "firefox", "edge"]) == ["brave", "firefox", "edge"]
+    def test_sin_pref_firefox_primero(self):
+        assert navegadores_para_reintento("", ["brave", "firefox", "edge"]) == [
+            "firefox", "brave", "edge"]
 
-    def test_pref_va_primero(self):
+    def test_sin_pref_sin_firefox_conserva_orden(self):
+        assert navegadores_para_reintento("", ["brave", "chrome", "edge"]) == [
+            "brave", "chrome", "edge"]
+
+    def test_pref_detectada_va_primero(self):
         assert navegadores_para_reintento("edge", ["brave", "firefox", "edge"]) == [
             "edge", "brave", "firefox"]
 
-    def test_pref_ausente_no_se_agrega(self):
-        assert navegadores_para_reintento("chrome", ["brave", "firefox"]) == ["brave", "firefox"]
+    def test_pref_ausente_cae_a_firefox_primero(self):
+        assert navegadores_para_reintento("chrome", ["brave", "firefox"]) == [
+            "firefox", "brave"]
 
     def test_sin_detectados_devuelve_vacio(self):
         assert navegadores_para_reintento("brave", []) == []
@@ -336,6 +342,57 @@ class TestNavegadoresParaReintento:
     def test_usa_deteccion_por_defecto(self, monkeypatch):
         monkeypatch.setattr(core, "detectar_navegadores", lambda: ["firefox", "brave"])
         assert navegadores_para_reintento() == ["firefox", "brave"]
+
+
+class TestTiposCuenta:
+    def test_tipos_cuenta(self):
+        assert core.TIPOS_CUENTA == {"private", "members_only", "age_restricted", "sign_in"}
+
+    def test_no_incluye_bot_ni_cookies(self):
+        assert "bot" not in core.TIPOS_CUENTA
+        assert "cookies" not in core.TIPOS_CUENTA
+
+    def test_firefox_compatible_abierto(self):
+        assert core.NAVEGADORES_COMPATIBLES_ABIERTOS == ["firefox"]
+
+
+class TestFallbackBotSinCookies:
+    def _opciones_capturadas(self, monkeypatch, navegador):
+        import core as core_mod
+        capturadas = []
+
+        class FakeYDL:
+            def __init__(self, opciones):
+                capturadas.append(opciones)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def download(self, urls):
+                raise core_mod.yt_dlp.utils.DownloadError("still bot")
+
+        monkeypatch.setattr(core_mod.yt_dlp, "YoutubeDL", FakeYDL)
+        clasificado = {"mensaje": "bot", "sugerencia": "s", "detalle": "", "tipo": "bot"}
+        core_mod._descargar_fallback_bot(
+            "https://youtu.be/x", "/tmp/out", "audio", "320", False, False,
+            None, None, navegador, None, None, None, None, None, None, clasificado,
+        )
+        return capturadas
+
+    def test_sin_navegador_no_usa_cookies(self, monkeypatch):
+        capturadas = self._opciones_capturadas(monkeypatch, None)
+        assert capturadas
+        assert all("cookiesfrombrowser" not in o for o in capturadas)
+
+    def test_con_navegador_usa_cookies(self, monkeypatch):
+        capturadas = self._opciones_capturadas(monkeypatch, "firefox")
+        assert capturadas
+        assert all(o.get("cookiesfrombrowser") == ("firefox", None, None, None)
+                   for o in capturadas)
+
 
 
 class TestFallbackBot:
