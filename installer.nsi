@@ -47,7 +47,7 @@ Section "Instalar"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\YT-DownLoader" \
     "InstallLocation" "$INSTDIR"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\YT-DownLoader" \
-    "DisplayVersion" "2.1.4"
+    "DisplayVersion" "3.8.0"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\YT-DownLoader" \
     "Publisher" "Rafael Reyes"
   WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\YT-DownLoader" \

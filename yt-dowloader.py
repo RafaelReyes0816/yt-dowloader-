@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-__version__ = "3.7.3"
+__version__ = "3.8.0"
 
 import os
 import subprocess
@@ -48,7 +48,6 @@ from core import (
     enmascarar_url,
     sanitizar_detalle,
     sanear_texto_clipboard,
-    normalizar_pistas_audio,
     CALIDADES_AUDIO,
     CALIDADES_VIDEO,
 )
@@ -1176,12 +1175,6 @@ class App(ctk.CTk):
         self.ffmpeg_ok = find_ffmpeg() is not None
         self.navegadores = navegadores_cacheados(self.prefs)
         self.queue_items = []
-        self._pistas_gen = 0
-        self._pistas_url_actual = ""
-        self._pistas_titulo = None
-        self._pistas_vars = []
-        self._pistas_cancel_evt = None
-        self._pistas_cargando = False
         self._latest_pendiente = ""
         self._release_pendiente = None
         self._modo_layout = None
@@ -1455,196 +1448,6 @@ class App(ctk.CTk):
         self.btn_agregar.grid(row=0, column=2)
         _configurar_foco_visible(self.btn_agregar)
 
-        self._build_pistas(url_frame)
-
-    def _build_pistas(self, master):
-        self.pistas_frame = ctk.CTkFrame(master, fg_color="transparent")
-        self.pistas_frame.grid(row=2, column=0, sticky="ew", padx=15, pady=(0, 12))
-        self.pistas_frame.grid_columnconfigure(0, weight=1)
-
-        header = ctk.CTkFrame(self.pistas_frame, fg_color="transparent")
-        header.grid(row=0, column=0, sticky="ew")
-        header.grid_columnconfigure(1, weight=1)
-
-        ctk.CTkLabel(header, text="Pistas de audio adicionales", font=FONTS["small_bold"],
-                     text_color=COLORS["text.secondary"]).grid(row=0, column=0, sticky="w")
-
-        self.pistas_estado = ctk.CTkLabel(header, text="", font=FONTS["mono_small"],
-                                          text_color=COLORS["text.secondary"], anchor="w")
-        self.pistas_estado.grid(row=0, column=1, sticky="w", padx=(10, 8))
-
-        self.btn_buscar_pistas = ctk.CTkButton(
-            header, text="Buscar pistas", command=self._buscar_pistas,
-            width=110, height=28, font=FONTS["small"],
-            fg_color=COLORS["bg.base"], hover_color=COLORS["bg.surface-hover"],
-            border_color=COLORS["border.subtle"], border_width=1,
-            text_color=COLORS["text.secondary"],
-        )
-        self.btn_buscar_pistas.grid(row=0, column=2, sticky="e")
-
-        self.pistas_lista = ctk.CTkScrollableFrame(
-            self.pistas_frame, fg_color=COLORS["bg.base"], corner_radius=8, height=150,
-            scrollbar_fg_color=COLORS["border.subtle"],
-            scrollbar_button_color=COLORS["border.subtle"],
-            scrollbar_button_hover_color=COLORS["bg.surface-hover"],
-        )
-        self.pistas_lista.grid(row=1, column=0, sticky="ew", padx=0, pady=(6, 0))
-        self.pistas_lista.grid_columnconfigure(0, weight=1)
-        self.pistas_lista.grid_remove()
-        self.pistas_frame.grid_remove()
-
-    def _actualizar_seccion_pistas(self, url, plataforma):
-        soporta = bool(PLATAFORMAS_CONFIG.get(plataforma, {}).get("soporta_pistas_audio"))
-        if not soporta:
-            if self._pistas_url_actual:
-                self._reiniciar_pistas()
-            self.pistas_frame.grid_remove()
-            return
-        if url != self._pistas_url_actual:
-            self._reiniciar_pistas(url)
-        self.pistas_frame.grid()
-        if not self._pistas_vars and not self._pistas_cargando:
-            self._set_pistas_estado("Pulsa «Buscar pistas» para consultar")
-
-    def _reiniciar_pistas(self, url=""):
-        self._pistas_gen += 1
-        if self._pistas_cancel_evt is not None:
-            self._pistas_cancel_evt.set()
-            self._pistas_cancel_evt = None
-        self._pistas_url_actual = url
-        self._pistas_titulo = None
-        self._pistas_vars = []
-        self._pistas_cargando = False
-        for widget in self.pistas_lista.winfo_children():
-            widget.destroy()
-        self.pistas_lista.grid_remove()
-        if hasattr(self, "btn_buscar_pistas"):
-            self.btn_buscar_pistas.configure(state="normal", text="Buscar pistas")
-        self._set_pistas_estado("")
-
-    def _set_pistas_estado(self, texto, color=None):
-        if hasattr(self, "pistas_estado"):
-            self.pistas_estado.configure(text=texto,
-                                         text_color=color or COLORS["text.secondary"])
-
-    def _buscar_pistas(self):
-        url = sanear_texto_clipboard(self.url_entry.get())
-        plataforma = detectar_plataforma(url) if PLATFORM_REGEX.search(url) else "Otra"
-        if not PLATAFORMAS_CONFIG.get(plataforma, {}).get("soporta_pistas_audio"):
-            return
-        if url != self._pistas_url_actual:
-            self._reiniciar_pistas(url)
-
-        self._pistas_gen += 1
-        gen = self._pistas_gen
-        if self._pistas_cancel_evt is not None:
-            self._pistas_cancel_evt.set()
-        evt = threading.Event()
-        self._pistas_cancel_evt = evt
-        self._pistas_vars = []
-        self._pistas_cargando = True
-        for widget in self.pistas_lista.winfo_children():
-            widget.destroy()
-        self.pistas_lista.grid_remove()
-        self.btn_buscar_pistas.configure(state="disabled", text="Buscando…")
-        self._set_pistas_estado("Consultando pistas…", COLORS["accent.progress"])
-        navegador = self._navegador_seleccionado()
-        threading.Thread(target=self._worker_pistas,
-                         args=(url, gen, evt, navegador), daemon=True).start()
-
-    def _worker_pistas(self, url, gen, evt, navegador):
-        try:
-            resultado = verificar_url(url, navegador, evt)
-            error = None
-        except Exception as e:
-            resultado = None
-            error = str(e)
-        self.after(0, lambda: self._aplicar_pistas(gen, url, resultado, error))
-
-    def _aplicar_pistas(self, gen, url, resultado, error):
-        if gen != self._pistas_gen or url != self._pistas_url_actual:
-            return
-        self._pistas_cancel_evt = None
-        self._pistas_cargando = False
-        self.btn_buscar_pistas.configure(state="normal", text="Buscar pistas")
-
-        if error:
-            self._set_pistas_estado("No se pudieron obtener las pistas", COLORS["accent.error"])
-            self._log(f"Error al buscar pistas: {error}")
-            return
-
-        restriccion = (resultado or {}).get("restriccion")
-        if restriccion:
-            if restriccion.get("tipo") == "cancelada":
-                return
-            mensaje = restriccion.get("mensaje") or "No disponible"
-            self._set_pistas_estado(mensaje.splitlines()[0], COLORS["accent.error"])
-            self._log(f"No se pudieron listar pistas: {mensaje}")
-            return
-
-        info = (resultado or {}).get("info") or {}
-        try:
-            pistas = normalizar_pistas_audio(info)
-        except Exception as e:
-            self._set_pistas_estado("No se pudieron leer las pistas", COLORS["accent.error"])
-            self._log(f"Error al normalizar pistas: {e}")
-            return
-        titulo = info.get("title")
-        if not pistas:
-            self._set_pistas_estado("Sin pistas adicionales para este video")
-            self.pistas_lista.grid_remove()
-            return
-
-        self._pistas_titulo = titulo or ""
-        self._pistas_vars = []
-        self._render_pistas(pistas)
-        self.pistas_lista.grid()
-        self._set_pistas_estado(
-            f"{len(pistas)} pista{'s' if len(pistas) > 1 else ''} · marca las que quieras",
-            COLORS["accent.success"],
-        )
-
-    def _render_pistas(self, pistas):
-        for widget in self.pistas_lista.winfo_children():
-            widget.destroy()
-        for fila_idx, pista in enumerate(pistas):
-            fila = ctk.CTkFrame(self.pistas_lista, fg_color="transparent")
-            fila.grid(row=fila_idx, column=0, sticky="ew", padx=6, pady=2)
-            fila.grid_columnconfigure(0, weight=1)
-
-            var = ctk.BooleanVar(value=False)
-            ctk.CTkCheckBox(
-                fila, text=pista["label"], variable=var,
-                font=FONTS["small"], text_color=COLORS["text.primary"],
-                fg_color=COLORS["accent.brand"], hover_color=COLORS["accent.brand-hover"],
-                border_color=COLORS["border.subtle"], checkmark_color=COLORS["text.primary"],
-                checkbox_width=18, checkbox_height=18,
-            ).grid(row=0, column=0, sticky="w")
-            ctk.CTkLabel(fila, text=self._detalle_pista(pista), font=FONTS["mono_small"],
-                         text_color=COLORS["text.secondary"]).grid(row=0, column=1, sticky="e",
-                                                                   padx=(8, 2))
-            self._pistas_vars.append((var, pista))
-
-    @staticmethod
-    def _detalle_pista(pista):
-        partes = [str(pista.get("ext") or "").upper()]
-        if pista.get("abr"):
-            try:
-                partes.append(f"{int(float(pista['abr']))} kbps")
-            except (TypeError, ValueError):
-                pass
-        if pista.get("audio_channels"):
-            partes.append(f"{pista['audio_channels']} can.")
-        return " · ".join(p for p in partes if p)
-
-    def _pistas_seleccionadas(self):
-        if not self._pistas_vars:
-            return []
-        url = sanear_texto_clipboard(self.url_entry.get())
-        if url != self._pistas_url_actual:
-            return []
-        return [dict(pista) for var, pista in self._pistas_vars if var.get()]
-
     def _programar_validacion_inline(self):
         if hasattr(self, "_val_job") and self._val_job is not None:
             try:
@@ -1672,9 +1475,6 @@ class App(ctk.CTk):
         if not texto:
             self._clear_url_hint()
             entry.configure(border_color=COLORS["border.subtle"])
-            if self._pistas_url_actual:
-                self._reiniciar_pistas()
-            self.pistas_frame.grid_remove()
             return False
         if texto and PLATFORM_REGEX.search(texto):
             plataforma = detectar_plataforma(texto)
@@ -1682,14 +1482,10 @@ class App(ctk.CTk):
                 self._url_valida = True
                 entry.configure(border_color=COLORS["accent.success"])
                 self._show_url_hint(f"✓ {plataforma}", COLORS["accent.success"])
-                self._actualizar_seccion_pistas(texto, plataforma)
                 return True
         entry.configure(border_color=COLORS["accent.error"])
         self._show_url_hint("URL no compatible · revisa el enlace y vuelve a pegar",
                             COLORS["accent.error"])
-        if self._pistas_url_actual:
-            self._reiniciar_pistas()
-        self.pistas_frame.grid_remove()
         return False
 
     def _show_url_hint(self, texto, color):
@@ -2169,26 +1965,7 @@ class App(ctk.CTk):
         self.after(0, lambda i=item: i["card"].set_titulo(titulo))
 
     def _titulo_item(self, item):
-        if item.get("tipo") == "pista_audio":
-            base = (item.get("titulo") or "").strip()
-            etiqueta = item.get("pista_label") or item.get("format_id") or "pista"
-            if base:
-                return f"{base} · audio adicional · {etiqueta}"
-            return f"audio adicional · {etiqueta}"
         return item.get("titulo") or item.get("url")
-
-    def _titulo_pista_card(self, item):
-        base = (item.get("titulo") or "").strip()
-        etiqueta = item.get("pista_label") or item.get("format_id") or "pista"
-        sufijo = f" · audio adicional · {etiqueta}"
-        if not base:
-            return f"audio adicional · {etiqueta}"
-        if len(sufijo) >= 52:
-            return sufijo[3:]
-        max_base = 52 - len(sufijo) - 1
-        if len(base) > max_base:
-            base = base[:max_base].rstrip() + "…"
-        return f"{base}{sufijo}"
 
     def _log(self, texto):
         if self._ocultar_urls:
@@ -2231,87 +2008,42 @@ class App(ctk.CTk):
         playlist = self.playlist_var.get()
         navegador = self._navegador_seleccionado()
 
-        pistas = self._pistas_seleccionadas()
-        titulo_pistas = self._pistas_titulo or ""
-        solicitudes = [{
-            "tipo": None,
-            "format_id": None,
-            "pista_label": None,
-            "titulo": None,
+        for existente in self.queue_items:
+            if existente["url"] == url:
+                self._show_url_hint("Ya está en cola", COLORS["accent.progress"])
+                return
+
+        item = {
+            "url": url,
+            "carpeta": carpeta,
             "modo": modo,
+            "calidad": calidad,
             "subtitulos": subtitulos,
             "playlist": playlist,
-        }]
-        for pista in pistas:
-            solicitudes.append({
-                "tipo": "pista_audio",
-                "format_id": pista["format_id"],
-                "pista_label": pista["label"],
-                "pista_archivo": pista["nombre"],
-                "titulo": titulo_pistas,
-                "modo": "audio",
-                "subtitulos": False,
-                "playlist": False,
-            })
+            "navegador": navegador,
+            "estado": "en_cola",
+            "titulo": None,
+            "cancel_flag": threading.Event(),
+            "ydl_holder": {},
+        }
 
-        existentes = {(existente["url"], existente.get("format_id"))
-                      for existente in self.queue_items}
-        nuevas = [s for s in solicitudes if (url, s["format_id"]) not in existentes]
-        if not nuevas:
-            self._show_url_hint("Ya está en cola", COLORS["accent.progress"])
-            return
+        card = QueueCard(
+            self.cola_inner, url, plataforma, item["modo"],
+            on_cancel=lambda it=item: self._cancelar_item(it),
+            on_retry=lambda it=item: self._reintentar_item(it),
+            on_remove=lambda it=item: self._quitar_item(it),
+            ocultar_urls=self._ocultar_urls,
+        )
+        card.grid(row=len(self.queue_items), column=0, sticky="ew", padx=4, pady=4)
+        item["card"] = card
+        self.queue_items.append(item)
 
-        for solicitud in nuevas:
-            item = {
-                "url": url,
-                "carpeta": carpeta,
-                "modo": solicitud["modo"],
-                "calidad": calidad,
-                "subtitulos": solicitud["subtitulos"],
-                "playlist": solicitud["playlist"],
-                "navegador": navegador,
-                "estado": "en_cola",
-                "titulo": solicitud["titulo"],
-                "cancel_flag": threading.Event(),
-                "ydl_holder": {},
-            }
-            if solicitud["tipo"] == "pista_audio":
-                item.update({
-                    "tipo": "pista_audio",
-                    "format_id": solicitud["format_id"],
-                    "pista_label": solicitud["pista_label"],
-                    "pista_archivo": solicitud["pista_archivo"],
-                    "origen_url": url,
-                })
-
-            card = QueueCard(
-                self.cola_inner, url, plataforma, item["modo"],
-                on_cancel=lambda it=item: self._cancelar_item(it),
-                on_retry=lambda it=item: self._reintentar_item(it),
-                on_remove=lambda it=item: self._quitar_item(it),
-                ocultar_urls=self._ocultar_urls,
-            )
-            card.grid(row=len(self.queue_items), column=0, sticky="ew", padx=4, pady=4)
-            item["card"] = card
-            if item.get("tipo") == "pista_audio":
-                card.set_titulo(self._titulo_pista_card(item))
-            self.queue_items.append(item)
-
-        agregadas_pistas = sum(1 for s in nuevas if s["tipo"] == "pista_audio")
         self._toggle_empty_state()
         self._actualizar_counter()
         self._guardar_prefs_actuales()
         self._log(f"Agregado: {url}")
-        if agregadas_pistas:
-            self._log(f"Pistas agregadas: {agregadas_pistas}")
-            self.annunciador.notify(
-                "ok", f"Agregado · {plataforma} · {agregadas_pistas} pista"
-                      f"{'s' if agregadas_pistas > 1 else ''}")
-        else:
-            self.annunciador.notify("ok", f"Agregado · {plataforma}")
+        self.annunciador.notify("ok", f"Agregado · {plataforma}")
 
-        self._reiniciar_pistas()
-        self.pistas_frame.grid_remove()
         self.url_entry.delete(0, "end")
         self._clear_url_hint()
         self.url_entry.configure(border_color=COLORS["border.subtle"])
@@ -2340,21 +2072,6 @@ class App(ctk.CTk):
                     ydl._download_retcode = 1
             except Exception:
                 pass
-
-    def _limpiar_part_cancelado(self, item):
-        ruta = item.pop("_part_archivo", None)
-        if not ruta or not str(ruta).endswith(".part"):
-            return
-        try:
-            ruta_real = os.path.realpath(str(ruta))
-            base_real = os.path.realpath(item["carpeta"])
-            dentro = (ruta_real == base_real or
-                      ruta_real.startswith(base_real + os.sep))
-            if dentro and os.path.isfile(ruta_real):
-                os.remove(ruta_real)
-                self._log(f"Parcial eliminado: {os.path.basename(ruta_real)}")
-        except OSError as e:
-            self._log(f"No se pudo eliminar el parcial: {e}")
 
     def _detener_todo(self):
         self.stop_all.set()
@@ -2434,56 +2151,44 @@ class App(ctk.CTk):
             self._set_estado(item, "cancelado")
             return
 
-        item.pop("_part_archivo", None)
-        es_pista = item.get("tipo") == "pista_audio"
-        if es_pista:
-            self._set_estado(item, "verificando")
-            self._log(f"Preparando pista {idx + 1} de {total}: "
-                      f"{item.get('pista_label') or item.get('format_id')}")
-            self.annunciador.notify("working", f"Pista {idx + 1} de {total}")
-        else:
-            self._set_estado(item, "verificando")
-            self._log(f"Verificando {idx + 1} de {total}: {item['url']}")
-            self.annunciador.notify("working", f"Verificando {idx + 1} de {total}")
+        self._set_estado(item, "verificando")
+        self._log(f"Verificando {idx + 1} de {total}: {item['url']}")
+        self.annunciador.notify("working", f"Verificando {idx + 1} de {total}")
 
-            precheck = verificar_url(item["url"], navegador_actual, item["cancel_flag"])
-            restriccion = precheck.get("restriccion")
-            tipo = restriccion.get("tipo") if restriccion else None
+        precheck = verificar_url(item["url"], navegador_actual, item["cancel_flag"])
+        restriccion = precheck.get("restriccion")
+        tipo = restriccion.get("tipo") if restriccion else None
 
-            if tipo == "cancelada" or item["cancel_flag"].is_set() or self.stop_all.is_set():
-                self._set_estado(item, "cancelado")
-                self._log(f"Cancelado durante verificación: {item['url']}")
-                self.annunciador.notify("info", "Verificación cancelada")
-                return
+        if tipo == "cancelada" or item["cancel_flag"].is_set() or self.stop_all.is_set():
+            self._set_estado(item, "cancelado")
+            self._log(f"Cancelado durante verificación: {item['url']}")
+            self.annunciador.notify("info", "Verificación cancelada")
+            return
 
-            if tipo in TIPOS_BLOQUEANTES and tipo not in TIPOS_REINTENTO_SESION:
-                mensaje = restriccion["mensaje"]
-                sugerencia = restriccion.get("sugerencia")
-                if sugerencia:
-                    mensaje += "\n\nSugerencia:\n" + sugerencia
-                self._set_estado(item, "error")
-                card = item["card"]
-                if hasattr(card, "set_error_detalle"):
-                    self.after(0, lambda m=mensaje: card.set_error_detalle(m))
-                self._log(f"Error en {item['url']}: {restriccion['mensaje']}")
-                self.annunciador.notify("error", f"Bloqueado · {restriccion['mensaje'][:60]}")
-                self.after(0, lambda m=mensaje: self._registrar_error(m))
-                return
+        if tipo in TIPOS_BLOQUEANTES and tipo not in TIPOS_REINTENTO_SESION:
+            mensaje = restriccion["mensaje"]
+            sugerencia = restriccion.get("sugerencia")
+            if sugerencia:
+                mensaje += "\n\nSugerencia:\n" + sugerencia
+            self._set_estado(item, "error")
+            card = item["card"]
+            if hasattr(card, "set_error_detalle"):
+                self.after(0, lambda m=mensaje: card.set_error_detalle(m))
+            self._log(f"Error en {item['url']}: {restriccion['mensaje']}")
+            self.annunciador.notify("error", f"Bloqueado · {restriccion['mensaje'][:60]}")
+            self.after(0, lambda m=mensaje: self._registrar_error(m))
+            return
 
-            info = precheck.get("info")
-            if info and info.get("title"):
-                self._set_titulo(item, info["title"])
+        info = precheck.get("info")
+        if info and info.get("title"):
+            self._set_titulo(item, info["title"])
 
         if item["cancel_flag"].is_set() or self.stop_all.is_set():
             self._set_estado(item, "cancelado")
             return
 
         self._set_estado(item, "descargando")
-        if es_pista:
-            self._log(f"Descargando pista {idx + 1} de {total}: "
-                      f"{item.get('pista_label') or item.get('format_id')}")
-        else:
-            self._log(f"Descargando {idx + 1} de {total}: {item['url']}")
+        self._log(f"Descargando {idx + 1} de {total}: {item['url']}")
         self.annunciador.notify("working", f"Descargando {idx + 1} de {total}")
 
         def on_progress(val):
@@ -2506,9 +2211,6 @@ class App(ctk.CTk):
                 self._log(f"Convirtiendo a mp3/mp4: {self._titulo_item(item)}")
                 self.annunciador.notify("working", "Convirtiendo a mp3/mp4")
 
-        def on_tmpfile(ruta):
-            item["_part_archivo"] = ruta
-
         exito, mensaje, tipo_fallo = descargar_musica(
             item["url"],
             item["carpeta"],
@@ -2521,15 +2223,10 @@ class App(ctk.CTk):
             navegador=navegador_actual,
             cancel_flag=item["cancel_flag"],
             ydl_holder=item["ydl_holder"],
-            postprocessor_callback=on_postproc if not es_pista else None,
-            format_id=item.get("format_id"),
-            pista_label=item.get("pista_archivo") or item.get("pista_label"),
-            tmpfile_callback=on_tmpfile,
+            postprocessor_callback=on_postproc,
         )
 
         if exito is False and tipo_fallo == "cancelada":
-            if es_pista:
-                self._limpiar_part_cancelado(item)
             self._set_estado(item, "cancelado")
             self._log(f"Cancelado: {self._titulo_item(item)}")
             self.annunciador.notify("info", "Descarga cancelada")
@@ -2557,14 +2254,9 @@ class App(ctk.CTk):
                     navegador=nav,
                     cancel_flag=item["cancel_flag"],
                     ydl_holder=item["ydl_holder"],
-                    postprocessor_callback=on_postproc if not es_pista else None,
-                    format_id=item.get("format_id"),
-                    pista_label=item.get("pista_archivo") or item.get("pista_label"),
-                    tmpfile_callback=on_tmpfile,
+                    postprocessor_callback=on_postproc,
                 )
                 if exito is False and tipo_fallo == "cancelada":
-                    if es_pista:
-                        self._limpiar_part_cancelado(item)
                     self._set_estado(item, "cancelado")
                     self._log(f"Cancelado: {self._titulo_item(item)}")
                     self.annunciador.notify("info", "Descarga cancelada")
