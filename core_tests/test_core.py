@@ -1,5 +1,7 @@
 import os
 import re
+import shutil
+import subprocess
 import sys
 import threading
 
@@ -307,6 +309,81 @@ class TestPreReleaseCheck:
         encontrado, detalle = mod._check_subtitulos(str(tmp_path), str(medio))
         assert encontrado is None
         assert "no se genero" in detalle
+
+
+class TestPreReleaseCheckConMedioSintetico:
+    """Los checks de ffprobe del E2E se validan con medios sinteticos.
+
+    Genera con ffmpeg archivos de contenido conocido y comprueba que el E2E
+    acepta lo correcto y RECHAZA lo que romperia al usuario: video que no es
+    h264 (el bug de AV1/VP9 dentro de mp4 que VLC no puede abrir) y audio que
+    no es mp3. Asi el gate del release esta probado sin depender de YouTube.
+    """
+
+    @staticmethod
+    def _cargar():
+        import importlib.util
+        ruta = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "pre_release_check.py")
+        spec = importlib.util.spec_from_file_location("pre_release_check", ruta)
+        modulo = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(modulo)
+        return modulo
+
+    @staticmethod
+    def _ffmpeg(*args):
+        subprocess.run(
+            [shutil.which("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y", *args],
+            check=True, capture_output=True,
+        )
+
+    @pytest.fixture(scope="class")
+    @staticmethod
+    def mod():
+        if not shutil.which("ffmpeg"):
+            pytest.skip("ffmpeg no disponible")
+        modulo = TestPreReleaseCheckConMedioSintetico._cargar()
+        if not modulo._ffprobe():
+            pytest.skip("ffprobe no disponible")
+        return modulo
+
+    def _mp4(self, ruta, codec_video):
+        self._ffmpeg(
+            "-f", "lavfi", "-i", "testsrc=duration=1:size=320x240:rate=10",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+            "-c:v", codec_video, "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-shortest", str(ruta),
+        )
+        return str(ruta)
+
+    def test_acepta_mp4_h264_con_aac(self, mod, tmp_path):
+        archivo = self._mp4(tmp_path / "Cafe [jNQXAC9IVRw].mp4", "libx264")
+        detalle = mod._check_video(mod._ffprobe(), archivo)
+        assert "h264" in detalle
+        assert "aac" in detalle
+        assert "mp4" in detalle
+
+    def test_rechaza_mp4_con_vp9(self, mod, tmp_path):
+        """VP9/AV1 dentro de mp4 es exactamente el bug que reporto VLC."""
+        archivo = self._mp4(tmp_path / "Cafe [jNQXAC9IVRw].mp4", "libvpx-vp9")
+        with pytest.raises(RuntimeError) as exc:
+            mod._check_video(mod._ffprobe(), archivo)
+        assert "h264" in str(exc.value)
+
+    def test_acepta_mp3(self, mod, tmp_path):
+        ruta = tmp_path / "Cafe.mp3"
+        self._ffmpeg("-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+                     "-c:a", "libmp3lame", str(ruta))
+        assert "mp3" in mod._check_audio(mod._ffprobe(), str(ruta))
+
+    def test_rechaza_audio_que_no_es_mp3(self, mod, tmp_path):
+        """Un .mp3 que en realidad es otro codec (pcm) debe rechazarse."""
+        ruta = tmp_path / "Cafe.mp3"
+        self._ffmpeg("-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+                     "-c:a", "pcm_s16le", "-f", "wav", str(ruta))
+        with pytest.raises(RuntimeError) as exc:
+            mod._check_audio(mod._ffprobe(), str(ruta))
+        assert "mp3" in str(exc.value)
 
 
 class TestSmokeUiEnCI:
