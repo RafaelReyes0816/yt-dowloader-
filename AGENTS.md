@@ -29,7 +29,7 @@ Linux + cookies de Chrome/Edge/Brave: `secretstorage` (ya en `requirements.txt` 
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest                # offline suite: 265 passed, 16 live deselected (v3.8.1)
+.venv/bin/python -m pytest                # offline suite: 268 passed, 1 skipped, 16 live deselected (v3.8.1)
 .venv/bin/python -m pytest core_tests/test_core.py -k <nombre> -q   # single test
 .venv/bin/python -m py_compile yt-dowloader.py core.py theme.py     # syntax check (run before committing)
 xvfb-run -a .venv/bin/python core_tests/smoke_ui.py                 # smoke de UI (headless)
@@ -39,7 +39,7 @@ xvfb-run -a .venv/bin/python core_tests/smoke_ui.py                 # smoke de U
 - Live suite: `core_tests/test_plataformas_live.py` — 16 tests over 8 real public URLs, marked `@pytest.mark.live`. Run manually only when needed: `.venv/bin/python -m pytest core_tests/test_plataformas_live.py -m live -v`. No CI job.
 - `core_tests/diagnostico_cookies.py` is **not a test** (no `test_` prefix → pytest never collects it). It is a standalone cookie/browser diagnostic script: `python core_tests/diagnostico_cookies.py [URL]`. CI compiles it via `.github/workflows/diagnostico.yml` (`workflow_dispatch` only).
 - `core_tests/smoke_ui.py` is **not a test** either: standalone smoke of the UI (hermético, sin red ni portapapeles). CI lo ejecuta como paso **bloqueante** en Linux (`xvfb-run -a python core_tests/smoke_ui.py`, requiere el paquete `xvfb` en el runner) justo después de la suite offline; si la UI no arranca, la build falla.
-- `core_tests/pre_release_check.py` is **not a test** either: chequeo E2E previo a una release (`--url/--res/--navegador/--solo`, exit 1 si falla). Verifica mp4 H.264+AAC, mp3, sufijo ` [id]` y `.vtt` junto al medio. **Debe ejecutarse en una red sin bloqueo de bot** (desde una IP bloqueada siempre falla).
+- `core_tests/pre_release_check.py` is **not a test** either: chequeo E2E previo a una release (`--url/--res/--navegador/--solo`, exit 1 si falla). Verifica mp4 H.264+AAC, mp3, sufijo ` [id]` y `.vtt` junto al medio. **Debe ejecutarse en una red sin bloqueo de bot** (desde una IP bloqueada siempre falla). Sus checks de `ffprobe` sí están cubiertos por la suite offline (`TestPreReleaseCheckConMedioSintetico`: genera con ffmpeg un mp4 h264+aac, uno vp9, un mp3 y un pcm con extensión .mp3, y verifica que se aceptan/rechazan correctamente); se omiten si no hay `ffmpeg`/`ffprobe` (el CI de Linux los instala para que no se salten).
 - CI cannot catch real-download bugs — the AV1/VLC regression shipped that way. Before tagging a release, run `core_tests/pre_release_check.py` (or manually verify one real mp3 + one real mp4 download, expect `h264/avc1` + `aac` in the mp4).
 
 ## Build standalone executable
@@ -57,7 +57,7 @@ Installers are built by CI from repo sources, not by the spec: `installer.nsi` (
 1. Bump `__version__` (line 2 of `yt-dowloader.py`). Commit style: `feat vX.Y.Z: ...` / `fix vX.Y.Z: ...` (message in Spanish).
 2. Verify: pytest + py_compile (+ the manual real-download check above).
 3. `git tag vX.Y.Z && git push origin vX.Y.Z` — push **the tag itself**; lightweight tags are not pushed by `--follow-tags`.
-4. Tag `v*` triggers `.github/workflows/build.yml`: builds Linux/Windows/macOS (Python 3.12), runs the offline suite on Linux, packages NSIS `.exe` + portable zip, `.deb` + tar.gz, `.dmg` + `.app` zip (Windows CI bundles `ffmpeg.exe`/`ffprobe.exe`), publishes 7 assets + `SHA256SUMS` via `softprops/action-gh-release`. Also runnable manually via `workflow_dispatch`.
+4. Tag `v*` triggers `.github/workflows/build.yml`: builds Linux/Windows/macOS (Python 3.12), runs the offline suite on Linux, packages NSIS `.exe` + portable zip, `.deb` + tar.gz, `.dmg` + `.app` zip (Windows CI bundles `ffmpeg.exe`/`ffprobe.exe`), publishes 7 assets + `SHA256SUMS` via `softprops/action-gh-release`. Also runnable manually via `workflow_dispatch` (the `release` job only runs on a tag ref, so a manual run builds but does not publish). The `Resolve version` step takes the version from the tag and falls back to `__version__` in `yt-dowloader.py` when the ref is a branch, so `dpkg-deb` never gets a non-numeric `Version`.
 5. Update `MEMORY.md` on the final commit of the batch (its header states the rule: version, commit/tag hash, CI status, test count).
 
 Note: `core_tests/pre_release_check.py` was **recreated in v3.8.1** (it had existed in v3.4.x and was removed in the 2026-10-18 revert). It is standalone, not collected by pytest, and is the automated replacement for the manual real-download check.
