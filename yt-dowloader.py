@@ -19,6 +19,7 @@ from core import (
     PLATAFORMAS_CONFIG,
     reintentar_con_sesion,
     debe_abortar_descarga,
+    es_error_cookies_descifrado,
     find_ffmpeg,
     detectar_plataforma,
     detectar_navegadores,
@@ -761,7 +762,14 @@ class VentanaDiagnostico(ctk.CTkToplevel):
         tipo_restr = restriccion.get("tipo") if restriccion else None
         if reintentar_con_sesion(tipo_restr):
             if not self.navegador or tipo_restr == "cookies":
-                candidatos = navegadores_para_reintento(self.navegador_pref, navegadores)
+                # Cookies indescifrables (DPAPI/app-bound en Windows): reintentar
+                # con otro Chromium es golpear la misma pared; solo un Gecko sirve.
+                solo_gecko = (tipo_restr == "cookies" and restriccion is not None
+                              and es_error_cookies_descifrado(
+                                  (restriccion.get("detalle") or "")
+                                  + " " + (restriccion.get("mensaje") or "")))
+                candidatos = navegadores_para_reintento(self.navegador_pref, navegadores,
+                                                        solo_gecko=solo_gecko)
                 if self.navegador:
                     candidatos = [n for n in candidatos if n != self.navegador]
                 for nav in candidatos:
@@ -2232,7 +2240,12 @@ class App(ctk.CTk):
             return
 
         if not exito and reintentar_con_sesion(tipo_fallo):
-            candidatos = navegadores_para_reintento(self._navegador_preferido(), self.navegadores)
+            # Cookies indescifrables (DPAPI/app-bound en Windows): reintentar con
+            # otro Chromium es golpear la misma pared; solo un Gecko sirve.
+            solo_gecko = (tipo_fallo == "cookies"
+                          and es_error_cookies_descifrado(mensaje or ""))
+            candidatos = navegadores_para_reintento(self._navegador_preferido(),
+                                                    self.navegadores, solo_gecko=solo_gecko)
             if navegador_actual:
                 candidatos = [n for n in candidatos if n != navegador_actual]
             for nav in candidatos:

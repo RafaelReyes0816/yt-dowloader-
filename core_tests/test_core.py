@@ -204,6 +204,66 @@ class TestClasificadorSecretStorage:
         assert "secretstorage" not in res["sugerencia"].lower()
 
 
+class TestClasificadorCookiesWindows:
+    """En Windows, Chrome/Edge/Brave cifran sus cookies con el sistema
+    (DPAPI / app-bound encryption): yt-dlp copia la base pero no puede
+    descifrarla. Cerrar el navegador NO lo arregla y reintentar con otro
+    Chromium fallara igual: solo un Gecko (Firefox/Zen/...) entrega sesion
+    en Windows."""
+
+    def _clasificar(self, mensaje):
+        import yt_dlp
+        return ClasificadorErrores.clasificar(
+            yt_dlp.utils.DownloadError(mensaje), "YouTube")
+
+    @pytest.mark.parametrize("mensaje", [
+        "ERROR: failed to decrypt with DPAPI",
+        "failed to decrypt with dpapi",
+        "ERROR: could not extract cookies: failed to decrypt with DPAPI",
+        "Cookies are encrypted with app-bound encryption",
+        "failed to decrypt app_bound encrypted key",
+        "could not decrypt app bound cookie",
+    ])
+    def test_error_descifrado_es_tipo_cookies(self, mensaje):
+        assert self._clasificar(mensaje)["tipo"] == "cookies"
+
+    def test_sugerencia_descifrado_menciona_gecko_y_desactivar(self):
+        res = self._clasificar("failed to decrypt with DPAPI")
+        suger = res["sugerencia"].lower()
+        assert "firefox" in suger or "zen" in suger
+        assert "desactiva" in suger
+
+    def test_sugerencia_descifrado_no_pide_cerrar_navegador(self):
+        res = self._clasificar("failed to decrypt with DPAPI")
+        # el texto del caso "navegador abierto" no aplica al descifrado
+        assert "cierra el navegador por completo" not in res["sugerencia"].lower()
+
+    def test_sugerencia_descifrado_no_menciona_secretstorage(self):
+        res = self._clasificar("failed to decrypt with DPAPI")
+        assert "secretstorage" not in res["sugerencia"].lower()
+
+    def test_locked_db_mantiene_nota_secretstorage(self):
+        res = self._clasificar("ERROR: Could not copy Brave cookie database.")
+        assert res["tipo"] == "cookies"
+        assert "secretstorage" in res["sugerencia"].lower()
+
+
+class TestErrorCookiesDescifrado:
+    def test_detecta_dpapi_y_app_bound(self):
+        from core import es_error_cookies_descifrado
+        assert es_error_cookies_descifrado("ERROR: failed to decrypt with DPAPI")
+        assert es_error_cookies_descifrado("app-bound encryption detected")
+        assert es_error_cookies_descifrado("failed to decrypt app_bound key")
+        assert es_error_cookies_descifrado("could not decrypt app bound cookie")
+
+    def test_ignora_otros_errores(self):
+        from core import es_error_cookies_descifrado
+        assert not es_error_cookies_descifrado("Could not copy Brave cookie database")
+        assert not es_error_cookies_descifrado("session expired")
+        assert not es_error_cookies_descifrado("")
+        assert not es_error_cookies_descifrado(None)
+
+
 class TestRequisitoSecretStorage:
     """`secretstorage` es un extra OPCIONAL de yt-dlp (yt-dlp[secretstorage]),
     no viene en `default`. Sin el, el build de Linux del CI (que hace
@@ -763,6 +823,61 @@ class TestNavegadoresParaReintento:
         assert navegadores_para_reintento() == ["firefox", "brave"]
 
 
+class TestNavegadoresReintentoSoloGecko:
+    """Con un error de cookies por descifrado (DPAPI/app-bound en Windows),
+    reintentar con otro Chromium es golpear la misma pared: solo un Gecko
+    puede entregar sesion en ese sistema."""
+
+    def test_sin_gecko_devuelve_vacio(self):
+        assert navegadores_para_reintento(
+            "chrome", ["brave", "chrome", "edge"], solo_gecko=True) == []
+
+    def test_solo_deja_los_gecko(self):
+        assert navegadores_para_reintento(
+            "chrome", ["brave", "firefox", "chrome", "zen"], solo_gecko=True) == [
+            "zen", "firefox"]
+
+    def test_pref_gecko_se_mantiene_primero(self):
+        assert navegadores_para_reintento(
+            "zen", ["brave", "zen"], solo_gecko=True) == ["zen"]
+
+    def test_sin_filtro_no_cambia(self):
+        assert navegadores_para_reintento("chrome", ["brave", "firefox"]) == [
+            "firefox", "brave"]
+
+
+class TestIntentosFallbackSinImpersonate:
+    """Si curl_cffi no esta disponible (p.ej. bundle congelado roto), pedir
+    impersonate='chrome' a yt-dlp lanza YoutubeDLError ('Impersonate target
+    "chrome" is not available') que NO es DownloadError: muere en silencio en
+    los except Exception. Mejor no pedir impersonacion si no hay libreria."""
+
+    def test_sin_curl_cffi_no_hay_impersonate(self, monkeypatch):
+        monkeypatch.setattr(core, "_impersonacion_disponible", lambda: False)
+        intentos = core._intentos_fallback_verificacion("brave")
+        assert intentos, "debe seguir habiendo intentos de clientes"
+        for intento in intentos:
+            assert not intento.get("impersonate"), intento
+        clientes = [i.get("cliente") for i in intentos if i.get("cliente")]
+        assert clientes == CLIENTES_FALLBACK_BOT
+
+    def test_con_curl_cffi_mantiene_impersonate(self, monkeypatch):
+        monkeypatch.setattr(core, "_impersonacion_disponible", lambda: True)
+        intentos = core._intentos_fallback_verificacion("brave")
+        con_impersonate = [i for i in intentos if i.get("impersonate") == "chrome"]
+        assert len(con_impersonate) == len(CLIENTES_FALLBACK_BOT)
+
+    def test_descarga_tambien_respete_la_disponibilidad(self, monkeypatch):
+        monkeypatch.setattr(core, "_impersonacion_disponible", lambda: False)
+        intentos = core._intentos_fallback_descarga("brave")
+        assert intentos
+        assert all(not i.get("impersonate") for i in intentos)
+
+    def test_deteccion_usa_import_real(self, monkeypatch):
+        # el modulo curl_cffi existe en el venv -> disponible True
+        assert core._impersonacion_disponible() is True
+
+
 class TestTiposCuenta:
     def test_tipos_cuenta(self):
         assert core.TIPOS_CUENTA == {"private", "members_only", "age_restricted", "sign_in"}
@@ -820,6 +935,7 @@ class TestContratoTiposRestriccion:
             fuente = fh.read()
         assert "reintentar_con_sesion(" in fuente
         assert "debe_abortar_descarga(" in fuente
+        assert "es_error_cookies_descifrado(" in fuente
         assert "set(TIPOS_CUENTA) | {\"cookies\"}" not in fuente
         assert "TIPOS_BLOQUEANTES" not in fuente
         assert "TIPOS_REINTENTO_SESION" not in fuente

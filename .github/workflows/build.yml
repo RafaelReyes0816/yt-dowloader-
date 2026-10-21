@@ -85,6 +85,19 @@ jobs:
             ls -lh dist/yt-dowloader/yt-dowloader
           fi
 
+      # Guard: sin el binario nativo de curl_cffi, yt-dlp no puede impersonar
+      # navegadores y la escalera anti-bot de YouTube muere en silencio.
+      - name: Verify curl_cffi bundled (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $wrapper = Get-ChildItem -Path "dist/yt-dowloader/_internal/curl_cffi" -Filter "*.pyd" -ErrorAction SilentlyContinue
+          if (-not $wrapper) {
+            Write-Error "No hay binario nativo de curl_cffi en el bundle: la impersonacion anti-bot fallaria en silencio en el .exe."
+            exit 1
+          }
+          $wrapper | ForEach-Object { Write-Host "curl_cffi nativo OK: $($_.Name) ($([math]::Round($_.Length/1MB,1)) MB)" }
+
       - name: Bundle ffmpeg (Windows)
         if: runner.os == 'Windows'
         shell: pwsh

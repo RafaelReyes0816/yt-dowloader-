@@ -52,6 +52,13 @@ _PARAMETRO_SENSIBLE_REGEX = re.compile(
     re.IGNORECASE,
 )
 
+# Errores de cookies que NO se arreglan cerrando el navegador: el sistema o el
+# navegador impiden descifrarlas (DPAPI / app-bound encryption en Windows).
+_ERROR_COOKIES_DESCIFRADO_REGEX = re.compile(
+    r"failed to decrypt|could not decrypt|app.?[- ]?bound",
+    re.IGNORECASE,
+)
+
 
 _CONTROL_REGEX = re.compile(r"[\x00-\x1f\x7f\u200b-\u200f\u2060\ufeff]+")
 
@@ -62,6 +69,18 @@ def sanear_texto_clipboard(texto):
         return ""
     limpio = _CONTROL_REGEX.sub(" ", str(texto))
     return re.sub(r"\s+", " ", limpio).strip()
+
+
+def es_error_cookies_descifrado(texto):
+    """True si el error indica cookies indescifrables (DPAPI / app-bound en Windows).
+
+    A diferencia de una base de datos bloqueada por el navegador abierto, este
+    caso no se arregla cerrando nada: solo un navegador Gecko (Firefox/Zen/...)
+    puede entregar una sesion legible en ese sistema.
+    """
+    if not texto:
+        return False
+    return bool(_ERROR_COOKIES_DESCIFRADO_REGEX.search(str(texto)))
 
 
 def extraer_url_completa(texto):
@@ -435,7 +454,7 @@ class ClasificadorErrores:
         ("members_only", r"members[- ]only|member[- ]only|subscribers?[- ]only"),
         ("age_restricted", r"age[- ]restricted|confirm your age|verify your age"),
         ("bot", r"not a bot|bot check|bot verification|unusual traffic|request complete verification|rate limit|too many requests"),
-        ("cookies", r"could not extract cookies|session expired|keyring|could not copy .*cookie database|could not copy .*cookies"),
+        ("cookies", r"could not extract cookies|session expired|keyring|could not copy .*cookie database|could not copy .*cookies|failed to decrypt|could not decrypt|app.?[- ]?bound"),
         ("sign_in", r"granted access|requires authentication|must be logged|login required|log ?in required"),
         ("geo", r"not available in your country|geo-?restricted|blocked in your country|unavailable in your (region|country)"),
         ("sign_in", r"\b(sign in|log ?in|loggin)\b"),
@@ -553,6 +572,15 @@ class ClasificadorErrores:
     @classmethod
     def _sugerencia(cls, tipo, msg):
         sugerencia = cls.SUGERENCIAS.get(tipo)
+        if tipo == "cookies" and es_error_cookies_descifrado(msg):
+            return (
+                "Chrome, Edge y Brave en Windows cifran sus cookies (DPAPI / app-bound "
+                "encryption) y no permiten que otra aplicacion las lea: cerrar el "
+                "navegador NO lo arregla. Usa un navegador Gecko: inicia sesion en la "
+                "plataforma dentro de Firefox, Zen, Waterfox o LibreWolf y selecciona "
+                "ese navegador en 'Usar sesion del navegador'. Si no tienes ninguno, "
+                "desactiva 'Usar sesion del navegador' y reintenta sin sesion."
+            )
         if tipo == "cookies" and re.search(r"could not copy .*cookie", msg):
             sugerencia = (sugerencia or "") + (
                 " En Linux, las cookies de Chrome/Edge/Brave se descifran con el modulo "
@@ -689,6 +717,26 @@ def extraer_info_video(url, navegador=None):
 
 CLIENTES_FALLBACK_BOT = ["tv", "web_embedded", "android_vr"]
 
+_IMPERSONACION_DISPONIBLE = None
+
+
+def _impersonacion_disponible():
+    """True si curl_cffi esta importable (yt-dlp puede impersonar navegadores).
+
+    Pedir ``impersonate`` sin la libreria lanza YoutubeDLError ('Impersonate
+    target "chrome" is not available'), que NO es DownloadError: moria en
+    silencio en los ``except Exception`` de la escalera. Se cachea porque en
+    un build congelado la libreria no aparece ni desaparece en runtime.
+    """
+    global _IMPERSONACION_DISPONIBLE
+    if _IMPERSONACION_DISPONIBLE is None:
+        try:
+            import curl_cffi  # noqa: F401
+            _IMPERSONACION_DISPONIBLE = True
+        except Exception:
+            _IMPERSONACION_DISPONIBLE = False
+    return _IMPERSONACION_DISPONIBLE
+
 
 def _intentar_verificar(url, navegador, cancel_flag, impersonate=None, player_client=None):
     opciones = _opciones_base(navegador, cancel_flag, impersonate=impersonate,
@@ -723,7 +771,12 @@ def verificar_url(url, navegador=None, cancel_flag=None):
     except yt_dlp.utils.DownloadError as e:
         restriccion = ClasificadorErrores.clasificar(e, detectar_plataforma(url))
         if es_yt and restriccion.get("tipo") in ("bot", "cookies"):
-            for intento in _intentos_fallback_verificacion(navegador):
+            # Cookies indescifrables (DPAPI/app-bound): los 3 clientes reusan el
+            # mismo navegador y fallarian igual al cargar las cookies -> directo
+            # a los navegadores Gecko.
+            solo_gecko = (restriccion.get("tipo") == "cookies"
+                          and es_error_cookies_descifrado(restriccion.get("detalle")))
+            for intento in _intentos_fallback_verificacion(navegador, solo_gecko=solo_gecko):
                 if cancel_flag is not None and cancel_flag.is_set():
                     resultado["restriccion"] = _verificar_cancelada()
                     return resultado
@@ -747,11 +800,15 @@ def verificar_url(url, navegador=None, cancel_flag=None):
         return resultado
 
 
-def _intentos_fallback_verificacion(navegador):
+def _intentos_fallback_verificacion(navegador, solo_gecko=False):
     intentos = []
-    for cliente in CLIENTES_FALLBACK_BOT:
-        intentos.append({"navegador": navegador, "impersonate": "chrome", "cliente": cliente})
-    for nav in navegadores_para_reintento(navegador or ""):
+    if not solo_gecko:
+        for cliente in CLIENTES_FALLBACK_BOT:
+            intento = {"navegador": navegador, "cliente": cliente}
+            if _impersonacion_disponible():
+                intento["impersonate"] = "chrome"
+            intentos.append(intento)
+    for nav in navegadores_para_reintento(navegador or "", solo_gecko=solo_gecko):
         if nav == navegador:
             continue
         intentos.append({"navegador": nav})
@@ -962,10 +1019,15 @@ def _descargar_fallback_bot(url, carpeta, modo, calidad, subtitulos, playlist,
     return False, mensaje, ultimo_clasificado.get("tipo")
 
 
-def _intentos_fallback_descarga(navegador):
-    intentos = [{"navegador": navegador, "impersonate": "chrome", "cliente": cliente}
-                for cliente in CLIENTES_FALLBACK_BOT]
-    for nav in navegadores_para_reintento(navegador or ""):
+def _intentos_fallback_descarga(navegador, solo_gecko=False):
+    intentos = []
+    if not solo_gecko:
+        for cliente in CLIENTES_FALLBACK_BOT:
+            intento = {"navegador": navegador, "cliente": cliente}
+            if _impersonacion_disponible():
+                intento["impersonate"] = "chrome"
+            intentos.append(intento)
+    for nav in navegadores_para_reintento(navegador or "", solo_gecko=solo_gecko):
         if nav == navegador:
             continue
         intentos.append({"navegador": nav})
@@ -1234,9 +1296,17 @@ def elegir_navegador_sesion(pref_navegador=""):
     return ""
 
 
-def navegadores_para_reintento(pref_navegador="", detectados=None):
+def navegadores_para_reintento(pref_navegador="", detectados=None, solo_gecko=False):
+    """Orden de navegadores para reintentar una descarga con sesion.
+
+    Con ``solo_gecko=True`` (error de cookies indescifrables: DPAPI / app-bound
+    en Windows) solo se consideran los Gecko: reintentar con otro Chromium
+    golpea la misma pared de cifrado.
+    """
     if detectados is None:
         detectados = detectar_navegadores()
+    if solo_gecko:
+        detectados = [n for n in detectados if n in NAVEGADORES_GECKO]
     orden = []
     if pref_navegador in detectados:
         orden.append(pref_navegador)
