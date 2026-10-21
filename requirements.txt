@@ -2,3 +2,7 @@ yt-dlp[default,curl-cffi]>=2026.8.19
 customtkinter>=5.4.0
 Pillow>=10.0.0
 pyinstaller>=6.0
+# En Linux las cookies de Chrome/Edge/Brave se descifran con libsecret.
+# `secretstorage` es un extra opcional de yt-dlp (no viene en `default`):
+# sin el, la app no puede copiar la base de datos de cookies.
+secretstorage>=3.5.0; sys_platform == "linux"

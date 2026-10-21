@@ -47,6 +47,13 @@ python yt-dowloader.py
 - Python 3.8 o superior.
 - `ffmpeg` instalado y en PATH (requerido para conversión a mp3 y muxing de mp4).
 - Linux: `sudo apt install python3-tk` si tkinter no viene incluido.
+- Linux (opcional, solo para usar la sesión del navegador de Chrome/Edge/Brave):
+  las cookies de esos navegadores se descifran con **libsecret** a través del módulo
+  `secretstorage`, que ya viene incluido en `requirements.txt` y en los builds.
+  Necesitas el servicio de claves en marcha (`gnome-keyring`/`kwallet`) y, si tu
+  distro lo separa, `sudo apt install libsecret-1-0`.
+  Firefox, Zen, Waterfox y LibreWolf **no** necesitan nada de esto (se leen sin
+  cifrado del sistema y sin cerrar el navegador).
 
 ## Actualizaciones automáticas
 
@@ -97,7 +104,9 @@ core.py           ─ Lógica pura (testable): descarga, verificación, errores,
 theme.py          ─ Design tokens (colores, fuentes, radios) + GLYPHS
 yt-dowloader.spec ─ Configuración de PyInstaller (multiplataforma)
 assets/icons/     ─ icon.png / icon.ico / icon.icns
-core_tests/       ─ Tests unitarios (pytest) + tests live de plataformas
+core_tests/       ─ Tests unitarios (pytest) + tests live de plataformas,
+                     smoke de UI (smoke_ui.py) y chequeo E2E previo a release
+                     (pre_release_check.py)
 ```
 
 ## Tests
@@ -111,6 +120,31 @@ core_tests/       ─ Tests unitarios (pytest) + tests live de plataformas
 ```
 
 El CI ejecuta la suite por defecto antes de cada release; un fallo bloquea la build.
+Además ejecuta un **smoke test de la UI** (bloqueante) que arranca la app en un
+entorno virtual (`xvfb`) y comprueba que la ventana, la cola y el layout
+responsive funcionan:
+
+```bash
+xvfb-run -a python core_tests/smoke_ui.py
+```
+
+### Chequeo previo a una release (E2E)
+
+La suite offline no puede detectar los fallos que solo aparecen al descargar de
+verdad (p. ej. YouTube sirviendo AV1, que VLC no abre dentro de un mp4). Antes de
+taggear, ejecuta el chequeo E2E sobre una red **sin** bloqueo de "I'm not a bot":
+
+```bash
+python core_tests/pre_release_check.py                      # video + audio + subtitulos
+python core_tests/pre_release_check.py --url "https://..." --res 1080p
+python core_tests/pre_release_check.py --navegador firefox
+python core_tests/pre_release_check.py --solo subtitulos
+```
+
+Verifica que el mp4 es H.264 + AAC en contenedor mp4, que el mp3 es válido, que
+el archivo de YouTube lleva el sufijo ` [id]` y que el `.vtt` de los subtítulos
+cae **junto** al medio (no en una subcarpeta). Devuelve código de salida 1 si
+algo falla: **no taggear** en ese caso.
 
 ## Notas
 

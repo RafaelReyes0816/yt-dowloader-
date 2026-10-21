@@ -111,16 +111,46 @@ def sanitizar_detalle(texto):
         limpio = limpio[:400] + "..."
     return limpio
 
-TIPOS_BLOQUEANTES = {
-    "private", "members_only", "age_restricted", "sign_in", "geo",
-    "unavailable", "not_found", "cookies", "bot",
-}
-
 TIMEOUT_RED = 20
 
-TIPOS_REINTENTO_SESION = {"private", "members_only", "age_restricted", "sign_in", "cookies", "bot"}
-
+# --- Contrato de tipos de restriccion -----------------------------------------
+# TIPOS_CUENTA: el contenido exige una cuenta de la plataforma (privado, de
+#   miembros, con limite de edad o que pide iniciar sesion).
+# TIPOS_REINTENTO_SESION: la UI debe reintentar la descarga con la sesion de
+#   otro navegador. NO incluye "bot": la escalera completa (clientes de yt-dlp
+#   + TODOS los navegadores detectados) ya la ejecuta
+#   core._descargar_fallback_bot, y repetirla en la UI solo duplicaria el
+#   trabajo (cada navegador volveria a probar los 3 clientes).
+# TIPOS_REINTENTO_CLIENTES: el error se combate cambiando de cliente de
+#   yt-dlp. Tambien lo resuelve core (verificar_url / _descargar_fallback_bot).
+# TIPOS_BLOQUEANTES: errores que impiden seguir. Un tipo de "bot" NO aborta la
+#   verificacion: la descarga tiene su propia escalera y debe llegar a correr.
 TIPOS_CUENTA = {"private", "members_only", "age_restricted", "sign_in"}
+
+TIPOS_REINTENTO_SESION = TIPOS_CUENTA | {"cookies"}
+
+TIPOS_REINTENTO_CLIENTES = {"bot"}
+
+TIPOS_BLOQUEANTES = TIPOS_REINTENTO_SESION | TIPOS_REINTENTO_CLIENTES | {
+    "geo", "unavailable", "not_found",
+}
+
+
+def reintentar_con_sesion(tipo):
+    """True si la UI debe reintentar la descarga con la sesion de otro navegador.
+
+    Excluye "bot" a proposito: la escalera completa ya la ejecuta core
+    (clientes + todos los navegadores). Repetirla aqui duplicaria el trabajo.
+    """
+    return tipo in TIPOS_REINTENTO_SESION
+
+
+def debe_abortar_descarga(tipo):
+    """True si la verificacion debe abortar sin intentar descargar nada."""
+    if tipo not in TIPOS_BLOQUEANTES:
+        return False
+    return tipo not in TIPOS_REINTENTO_SESION and tipo not in TIPOS_REINTENTO_CLIENTES
+
 
 ORDEN_NAVEGADORES = ["zen", "firefox", "waterfox", "librewolf", "brave", "vivaldi", "opera", "chrome", "edge"]
 
@@ -494,7 +524,7 @@ class ClasificadorErrores:
         "age_restricted": "Inicia sesion en tu navegador en la plataforma y activa 'Usar sesion del navegador'.",
         "geo": "Usa una red en la region permitida para este contenido.",
         "sign_in": "Inicia sesion en tu navegador en la plataforma y activa 'Usar sesion del navegador'.",
-        "bot": "Espera unos minutos y reintenta. La app ya probo automaticamente todos los navegadores detectados; si ninguno funciono, abre la plataforma en tu navegador (donde tengas la sesion iniciada), activa 'Usar sesion del navegador' y reintenta.",
+        "bot": "La plataforma esta bloqueando la IP de esta conexion, no la app: ninguna version ni ajuste la evita. Espera unos minutos, cambia de red (VPN, datos moviles u otra conexion) o prueba desde otro equipo. La app ya probo automaticamente varios clientes de yt-dlp y todos los navegadores detectados. La sesion del navegador solo sirve para contenido que exige cuenta (privado, de miembros, con limite de edad).",
         "cookies": "El navegador tiene bloqueada su base de datos de cookies (Chrome/Edge/Brave/Vivaldi lo hacen si estan abiertos o por cifrado DPAPI en Windows). La app prueba automaticamente todos los navegadores detectados en orden (primero los Gecko: Firefox/Zen/Waterfox/LibreWolf, que se leen sin cerrarlos). Si con ninguno funciona, cierra el navegador por completo (revisa el Administrador de tareas: hay procesos en segundo plano) y reintenta.",
         "not_found": "Verifica que la URL este completa y sea correcta.",
         "extractor": "Actualiza yt-dlp desde el Diagnostico o ejecuta: python -m pip install -U \"yt-dlp[default,curl-cffi]\". Si el error es de TikTok y persiste, activa 'Usar sesion del navegador' para pasar el challenge, o espera unos minutos (TikTok bloquea IPs temporalmente).",
@@ -521,6 +551,19 @@ class ClasificadorErrores:
         return mensaje
 
     @classmethod
+    def _sugerencia(cls, tipo, msg):
+        sugerencia = cls.SUGERENCIAS.get(tipo)
+        if tipo == "cookies" and re.search(r"could not copy .*cookie", msg):
+            sugerencia = (sugerencia or "") + (
+                " En Linux, las cookies de Chrome/Edge/Brave se descifran con el modulo "
+                "'secretstorage' (libsecret): la app ya lo incluye, pero si ejecutas el codigo "
+                "desde el terminal instalalo con 'python3 -m pip install secretstorage'. "
+                "En cualquier sistema, Firefox/Zen/Waterfox/LibreWolf se leen sin cifrado del "
+                "sistema y sin cerrar el navegador."
+            )
+        return sugerencia
+
+    @classmethod
     def clasificar(cls, exc, plataforma):
         texto = str(exc)
         msg = texto.lower()
@@ -530,7 +573,7 @@ class ClasificadorErrores:
                 return {
                     "tipo": tipo,
                     "mensaje": cls._mensaje(tipo, plataforma),
-                    "sugerencia": cls.SUGERENCIAS.get(tipo),
+                    "sugerencia": cls._sugerencia(tipo, msg),
                     "detalle": detalle,
                 }
         return {

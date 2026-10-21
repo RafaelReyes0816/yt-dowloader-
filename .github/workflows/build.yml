@@ -36,7 +36,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-tk
+          sudo apt-get install -y python3-tk xvfb
 
       - name: Install NSIS (Windows)
         if: runner.os == 'Windows'
@@ -52,6 +52,11 @@ jobs:
       - name: Run unit tests (Linux)
         if: runner.os == 'Linux'
         run: python -m pytest -q
+
+      # Bloqueante: si la UI no arranca, la release no se publica.
+      - name: Smoke test UI (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python core_tests/smoke_ui.py
 
       - name: Build executable
         run: pyinstaller yt-dowloader.spec

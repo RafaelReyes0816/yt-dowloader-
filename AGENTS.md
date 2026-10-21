@@ -24,19 +24,23 @@ python yt-dowloader.py
 ```
 
 System deps: `ffmpeg` on PATH (mp3 conversion + mp4 muxing). Debian/Ubuntu: `sudo apt install python3-tk` if tkinter is missing.
+Linux + cookies de Chrome/Edge/Brave: `secretstorage` (ya en `requirements.txt` con marcador `sys_platform == "linux"`) + `libsecret-1-0` y un gestor de claves en marcha. Firefox/Gecko no lo necesita.
 
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest                # offline suite: 226 passed, 16 live deselected (v3.8.0)
+.venv/bin/python -m pytest                # offline suite: 265 passed, 16 live deselected (v3.8.1)
 .venv/bin/python -m pytest core_tests/test_core.py -k <nombre> -q   # single test
 .venv/bin/python -m py_compile yt-dowloader.py core.py theme.py     # syntax check (run before committing)
+xvfb-run -a .venv/bin/python core_tests/smoke_ui.py                 # smoke de UI (headless)
 ```
 
 - `pytest.ini` sets `testpaths = core_tests`, `pythonpath = .`, `addopts = -m "not live"` → live tests are skipped by default and **CI only runs this offline suite** (on Linux, before `pyinstaller`; failure blocks the release).
 - Live suite: `core_tests/test_plataformas_live.py` — 16 tests over 8 real public URLs, marked `@pytest.mark.live`. Run manually only when needed: `.venv/bin/python -m pytest core_tests/test_plataformas_live.py -m live -v`. No CI job.
 - `core_tests/diagnostico_cookies.py` is **not a test** (no `test_` prefix → pytest never collects it). It is a standalone cookie/browser diagnostic script: `python core_tests/diagnostico_cookies.py [URL]`. CI compiles it via `.github/workflows/diagnostico.yml` (`workflow_dispatch` only).
-- CI cannot catch real-download bugs — the AV1/VLC regression shipped that way. Before tagging a release, manually verify one real mp3 + one mp4 download (expect `h264/avc1` + `aac` in the mp4).
+- `core_tests/smoke_ui.py` is **not a test** either: standalone smoke of the UI (hermético, sin red ni portapapeles). CI lo ejecuta como paso **bloqueante** en Linux (`xvfb-run -a python core_tests/smoke_ui.py`, requiere el paquete `xvfb` en el runner) justo después de la suite offline; si la UI no arranca, la build falla.
+- `core_tests/pre_release_check.py` is **not a test** either: chequeo E2E previo a una release (`--url/--res/--navegador/--solo`, exit 1 si falla). Verifica mp4 H.264+AAC, mp3, sufijo ` [id]` y `.vtt` junto al medio. **Debe ejecutarse en una red sin bloqueo de bot** (desde una IP bloqueada siempre falla).
+- CI cannot catch real-download bugs — the AV1/VLC regression shipped that way. Before tagging a release, run `core_tests/pre_release_check.py` (or manually verify one real mp3 + one real mp4 download, expect `h264/avc1` + `aac` in the mp4).
 
 ## Build standalone executable
 
@@ -44,7 +48,7 @@ System deps: `ffmpeg` on PATH (mp3 conversion + mp4 muxing). Debian/Ubuntu: `sud
 pyinstaller yt-dowloader.spec    # output in dist/
 ```
 
-Spec is **multiplatform** (no `target_arch`; PyInstaller autodetects). Its `hiddenimports` must keep `curl_cffi`/`curl_cffi.requests` (TikTok impersonation) and it bundles CustomTkinter data files.
+Spec is **multiplatform** (no `target_arch`; PyInstaller autodetects). Its `hiddenimports` must keep `curl_cffi`/`curl_cffi.requests` (TikTok impersonation) and it bundles CustomTkinter data files. On Linux it also does `collect_all("secretstorage")` (cookies of Chromium) — guarded by `try/except` so the build never breaks if the module is absent.
 
 Installers are built by CI from repo sources, not by the spec: `installer.nsi` (NSIS → `YT-DownLoader-Jaeger-Setup.exe`) and `packaging/linux/` (`DEBIAN/control` + `.desktop` → `.deb`, installed to `/opt/yt-dowloader`). The `.deb` is built **only** on `ubuntu-22.04` with `Architecture: amd64` hardcoded; CI seds the version from the tag.
 
@@ -56,11 +60,11 @@ Installers are built by CI from repo sources, not by the spec: `installer.nsi` (
 4. Tag `v*` triggers `.github/workflows/build.yml`: builds Linux/Windows/macOS (Python 3.12), runs the offline suite on Linux, packages NSIS `.exe` + portable zip, `.deb` + tar.gz, `.dmg` + `.app` zip (Windows CI bundles `ffmpeg.exe`/`ffprobe.exe`), publishes 7 assets + `SHA256SUMS` via `softprops/action-gh-release`. Also runnable manually via `workflow_dispatch`.
 5. Update `MEMORY.md` on the final commit of the batch (its header states the rule: version, commit/tag hash, CI status, test count).
 
-Note: `core_tests/pre_release_check.py` (automated pre-release E2E download) existed in v3.4.x and was **removed in the 2026-10-18 revert** — recreate it if you want that automation back.
+Note: `core_tests/pre_release_check.py` was **recreated in v3.8.1** (it had existed in v3.4.x and was removed in the 2026-10-18 revert). It is standalone, not collected by pytest, and is the automated replacement for the manual real-download check.
 
 ## Architecture
 
-- `core.py` — pure business logic, **no UI/network on import** (testable): `PLATFORM_REGEX`, `extraer_url_completa`, `detectar_plataforma`, `ClasificadorErrores` (yt-dlp errors → friendly Spanish + `detalle` field, sanitized via `sanitizar_detalle`), `verificar_url(url, navegador=None, cancel_flag=None)`, `extraer_info_video`, `descargar_musica(..., cancel_flag, ydl_holder, postprocessor_callback)`, `find_ffmpeg`, prefs load/save, `comparar_versiones`, `check_for_update()` (GitHub Releases) + `obtener_ultima_version_ytdlp()` (PyPI), `PLATAFORMAS_CONFIG`, `RESOLUCIONES_YOUTUBE`, `RESOLUCIONES_GENERICAS`, `CALIDADES_AUDIO`/`CALIDADES_VIDEO` (**the UI must not hardcode qualities**), `TIMEOUT_RED`=20, `ORDEN_NAVEGADORES`, `NAVEGADORES_COMPATIBLES_ABIERTOS`, `NAVEGADORES_RUTAS`, `NAVEGADORES_ARCHIVO_PERFIL`, `NAVEGADORES_GECKO`, `perfil_gecko`, `navegadores_cacheados`, `TIPOS_CUENTA`, `CLIENTES_FALLBACK_BOT`, `navegadores_para_reintento`.
+- `core.py` — pure business logic, **no UI/network on import** (testable): `PLATFORM_REGEX`, `extraer_url_completa`, `detectar_plataforma`, `ClasificadorErrores` (yt-dlp errors → friendly Spanish + `detalle` field, sanitized via `sanitizar_detalle`), `verificar_url(url, navegador=None, cancel_flag=None)`, `extraer_info_video`, `descargar_musica(..., cancel_flag, ydl_holder, postprocessor_callback)`, `find_ffmpeg`, prefs load/save, `comparar_versiones`, `check_for_update()` (GitHub Releases) + `obtener_ultima_version_ytdlp()` (PyPI), `PLATAFORMAS_CONFIG`, `RESOLUCIONES_YOUTUBE`, `RESOLUCIONES_GENERICAS`, `CALIDADES_AUDIO`/`CALIDADES_VIDEO` (**the UI must not hardcode qualities**), `TIMEOUT_RED`=20, `ORDEN_NAVEGADORES`, `NAVEGADORES_COMPATIBLES_ABIERTOS`, `NAVEGADORES_RUTAS`, `NAVEGADORES_ARCHIVO_PERFIL`, `NAVEGADORES_GECKO`, `perfil_gecko`, `navegadores_cacheados`, `TIPOS_CUENTA`, `CLIENTES_FALLBACK_BOT`, `navegadores_para_reintento`, `TIPOS_REINTENTO_SESION`/`TIPOS_REINTENTO_CLIENTES`/`TIPOS_BLOQUEANTES` + `reintentar_con_sesion(tipo)`/`debe_abortar_descarga(tipo)` (contrato único de tipos; la UI **debe** usar los helpers, no sets inline).
 - `yt-dowloader.py` — UI: `App`, `VentanaDiagnostico`, `VentanaActualizacion`, `QueueCard`, `SegmentedControl`, `PillToggle`, `Annunciador` (transient HUD), `SpinnerRing`. **All UI updates must go through `self.after(0, ...)`** — Tkinter is not thread-safe; worker threads never touch widgets directly.
 - Responsive layout (v3.7.0): `_build_ui` builds `body` → `panel_izq` (input+opciones) + `panel_der` (cola); header/annunciador/statusbar stay on `self`. `<Configure>` → debounced (`_resize_job`, 80 ms) `_on_resize` → `_aplicar_layout_por_ancho`: `< BREAKPOINTS["dos_columnas"]` (1080 px, `theme.py`) → 1 columna apilada, `>=` → 2 columnas (sidebar fijo `LAYOUT["sidebar_w"]`=360 px, cola flexible). `_aplicar_layout` only re-grids the **same** panels (never recreates widgets); `_reflow_fila`/`_reflow_opciones`/`_reflow_botones_cola` re-wrap option toggles and queue buttons by `winfo_reqwidth()` vs container width; `_limitar_ancho_cards` caps `QueueCard`s at `LAYOUT["card_max_w"]`=900 px (left-aligned) via a trailing spacer column in `cola_inner`. Window geometry persisted as pref `ventana_geom` (`_geometria_actual()` on save, `_restaurar_geometria()` + `_asegurar_visible()` on start).
 - `theme.py` — design tokens (colors/fonts/radii) + `GLYPHS`.
@@ -74,7 +78,7 @@ Note: `core_tests/pre_release_check.py` (automated pre-release E2E download) exi
 - Dialogs: `lift()` in `__init__` fails silently before a Toplevel is mapped → both `VentanaDiagnostico` and `VentanaActualizacion` use `transient(self.master)` + `self.after(120, self._encima)` (`deiconify`+`lift`+`focus_force`+`-topmost` for 300 ms). Same trap applies to any new dialog.
 - TikTok: needs `yt-dlp[default,curl-cffi]>=2026.8.19` (requirements) + `curl_cffi` hiddenimports in the spec (impersonation); the classifier maps extraction/impersonation errors to a friendly `extractor` message.
 - Privacy: pref `ocultar_urls` (default ON) + `enmascarar_url()` masks URLs in queue/diagnostics/history/copy; error logging goes through `_registrar_error` with sanitized detail.
-- Deliberately reverted (2026-10-18, at user request): the whole v3.4.x line (audio/subtitle language selectors, embedded subtitles, tmpdir "sin restos", `[id]` suffix on all platforms, `pre_release_check.py`). **Do not re-apply it from git history without asking** — it caused issues #1/#2 and the root cause was never confirmed.
+- Deliberately reverted (2026-10-18, at user request): the whole v3.4.x line (audio/subtitle language selectors, embedded subtitles, tmpdir "sin restos", `[id]` suffix on all platforms). **Do not re-apply it from git history without asking** — it caused issues #1/#2 and the root cause was never confirmed. Exception approved by the user in v3.8.1: `core_tests/pre_release_check.py` was recreated **from scratch** (not cherry-picked from v3.4.x) and only checks, it does not change the app's download behaviour.
 - Also removed in v3.8.0 (at user request): the v3.5.0 "pistas de audio adicionales" feature (YouTube additional audio tracks / doblajes) — `normalizar_pistas_audio`, `nombre_pista_seguro`, `es_audio_original`, `soporta_pistas_audio`, the `format_id`/`pista_label`/`tmpfile_callback` params, the `pistas_audio` UI section, the `tipo="pista_audio"` queue items and `PLAN_UPDATE_PISTAS_AUDIO_ADICIONALES.md`. **Do not re-apply it from git history without asking.** v3.8.0 = v3.3.2's download/subtitle behaviour + v3.6.x auto-update + v3.7.x responsive UI/session handling.
 - Skills live in `.opencode/skills/` and are indexed in `SKILLS_PROYECTO.md` (loaded via `.opencode/opencode.json`); invoke by exact name via the `skill` tool. Restart opencode after changing `.opencode/`.
 

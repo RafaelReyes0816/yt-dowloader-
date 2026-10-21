@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-__version__ = "3.8.0"
+__version__ = "3.8.1"
 
 import os
 import subprocess
@@ -17,9 +17,8 @@ from core import (
     GITHUB_REPO,
     PLATFORM_REGEX,
     PLATAFORMAS_CONFIG,
-    TIPOS_BLOQUEANTES,
-    TIPOS_REINTENTO_SESION,
-    TIPOS_CUENTA,
+    reintentar_con_sesion,
+    debe_abortar_descarga,
     find_ffmpeg,
     detectar_plataforma,
     detectar_navegadores,
@@ -760,7 +759,7 @@ class VentanaDiagnostico(ctk.CTkToplevel):
         resultado = verificar_url(self.url, self.navegador)
         restriccion = resultado.get("restriccion")
         tipo_restr = restriccion.get("tipo") if restriccion else None
-        if tipo_restr in TIPOS_CUENTA or tipo_restr == "cookies":
+        if reintentar_con_sesion(tipo_restr):
             if not self.navegador or tipo_restr == "cookies":
                 candidatos = navegadores_para_reintento(self.navegador_pref, navegadores)
                 if self.navegador:
@@ -770,7 +769,7 @@ class VentanaDiagnostico(ctk.CTkToplevel):
                     resultado = verificar_url(self.url, nav)
                     restriccion = resultado.get("restriccion")
                     tipo_restr = restriccion.get("tipo") if restriccion else None
-                    if tipo_restr not in TIPOS_CUENTA and tipo_restr != "cookies":
+                    if not reintentar_con_sesion(tipo_restr):
                         break
                     if tipo_restr != "cookies":
                         break
@@ -2165,7 +2164,7 @@ class App(ctk.CTk):
             self.annunciador.notify("info", "Verificación cancelada")
             return
 
-        if tipo in TIPOS_BLOQUEANTES and tipo not in TIPOS_REINTENTO_SESION:
+        if debe_abortar_descarga(tipo):
             mensaje = restriccion["mensaje"]
             sugerencia = restriccion.get("sugerencia")
             if sugerencia:
@@ -2232,7 +2231,7 @@ class App(ctk.CTk):
             self.annunciador.notify("info", "Descarga cancelada")
             return
 
-        if not exito and tipo_fallo in (set(TIPOS_CUENTA) | {"cookies"}):
+        if not exito and reintentar_con_sesion(tipo_fallo):
             candidatos = navegadores_para_reintento(self._navegador_preferido(), self.navegadores)
             if navegador_actual:
                 candidatos = [n for n in candidatos if n != navegador_actual]

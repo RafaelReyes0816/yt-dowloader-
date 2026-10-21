@@ -1,4 +1,6 @@
 import os
+import re
+import sys
 import threading
 
 import pytest
@@ -145,6 +147,199 @@ class TestClasificadorErrores:
     def test_sugerencia_cookies_menciona_cerrar_navegador(self):
         sugerencia = ClasificadorErrores.SUGERENCIAS.get("cookies", "").lower()
         assert "cierra" in sugerencia
+
+
+class TestSugerenciaBotHonesta:
+    """El bloqueo de bot de YouTube lo impone la IP, no la app ni la sesion.
+
+    Comprobado empiricamente (yt-dlp 2026.08.19): los 10 player_client fallan
+    igual y, con una sesion valida de Brave, el error sigue siendo
+    "The page needs to be reloaded". Por eso la sugerencia no debe prometer
+    que "activar la sesion del navegador" lo arregla.
+    """
+
+    def _sugerencia(self):
+        return ClasificadorErrores.SUGERENCIAS.get("bot", "")
+
+    def test_no_promete_que_la_sesion_del_navegador_lo_arrele(self):
+        sugerencia = self._sugerencia().lower()
+        assert "usar sesion del navegador" not in sugerencia
+        assert "activa 'usar sesion" not in sugerencia
+
+    def test_menciona_ip_o_red(self):
+        sugerencia = self._sugerencia().lower()
+        assert re.search(r"\bip\b|\bred\b|\bvpn\b", sugerencia), sugerencia
+
+    def test_clasificado_bot_incluye_la_sugerencia(self):
+        import yt_dlp
+        res = ClasificadorErrores.clasificar(
+            yt_dlp.utils.DownloadError("Sign in to confirm you're not a bot"), "YouTube")
+        assert res["tipo"] == "bot"
+        assert re.search(r"\bip\b|\bred\b|\bvpn\b", res["sugerencia"].lower())
+
+
+class TestClasificadorSecretStorage:
+    """En Linux las cookies de Chromium (Chrome/Brave/Edge) se descifran con
+    `secretstorage` (libsecret). Si falta, yt-dlp no puede copiar la base de
+    datos: "Could not copy ... cookie database"."""
+
+    def _clasificar(self, mensaje):
+        import yt_dlp
+        return ClasificadorErrores.clasificar(
+            yt_dlp.utils.DownloadError(mensaje), "YouTube")
+
+    def test_could_not_copy_es_tipo_cookies(self):
+        res = self._clasificar("ERROR: Could not copy Brave cookie database.")
+        assert res["tipo"] == "cookies"
+
+    def test_sugerencia_menciona_secretstorage(self):
+        res = self._clasificar("ERROR: Could not copy Brave cookie database.")
+        assert "secretstorage" in res["sugerencia"].lower()
+
+    def test_sugerencia_generica_no_menciona_secretstorage(self):
+        res = self._clasificar("ERROR: could not extract cookies: session expired")
+        assert res["tipo"] == "cookies"
+        assert "secretstorage" not in res["sugerencia"].lower()
+
+
+class TestRequisitoSecretStorage:
+    """`secretstorage` es un extra OPCIONAL de yt-dlp (yt-dlp[secretstorage]),
+    no viene en `default`. Sin el, el build de Linux del CI (que hace
+    `pip install -r requirements.txt`) empaqueta la app sin poder descifrar las
+    cookies de Chrome/Edge/Brave -> 'Could not copy ... cookie database'."""
+
+    def _raiz(self):
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def test_requirements_declara_secretstorage(self):
+        ruta = os.path.join(self._raiz(), "requirements.txt")
+        with open(ruta, encoding="utf-8") as fh:
+            lineas = [l.strip() for l in fh if l.strip() and not l.strip().startswith("#")]
+        declarados = [l for l in lineas if l.lower().startswith("secretstorage")]
+        assert declarados, "requirements.txt debe declarar secretstorage (lo necesita Linux para las cookies de Chromium)"
+
+    def test_el_marcador_esta_limitado_a_linux(self):
+        ruta = os.path.join(self._raiz(), "requirements.txt")
+        with open(ruta, encoding="utf-8") as fh:
+            lineas = [l.strip() for l in fh if l.strip() and not l.strip().startswith("#")]
+        declarados = [l for l in lineas if l.lower().startswith("secretstorage")]
+        assert all("linux" in l for l in declarados), declarados
+        assert all("win32" not in l and "darwin" not in l for l in declarados), declarados
+
+    def test_el_spec_lo_empaqueta(self):
+        ruta = os.path.join(self._raiz(), "yt-dowloader.spec")
+        with open(ruta, encoding="utf-8") as fh:
+            fuente = fh.read()
+        assert "secretstorage" in fuente
+
+
+class TestPreReleaseCheck:
+    """`core_tests/pre_release_check.py` es standalone (pytest no lo recoge
+    porque no empieza por `test_`), pero sus helpers se verifican aqui."""
+
+    @staticmethod
+    def _cargar():
+        import importlib.util
+        ruta = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "pre_release_check.py")
+        spec = importlib.util.spec_from_file_location("pre_release_check", ruta)
+        modulo = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(modulo)
+        return modulo
+
+    def test_expone_el_cli_esperado(self):
+        mod = self._cargar()
+        assert mod.URL_DEFECTO.startswith("https://")
+        assert set(mod.MODOS) == {"video", "audio", "subtitulos"}
+        assert mod.RES_DEFECTO.endswith("p")
+
+    def test_id_de_youtube(self):
+        mod = self._cargar()
+        assert mod._id_de_youtube(
+            "https://www.youtube.com/watch?v=jNQXAC9IVRw") == "jNQXAC9IVRw"
+        assert mod._id_de_youtube(
+            "https://www.youtube.com/watch?list=PL1&v=abc123") == "abc123"
+        assert mod._id_de_youtube("https://example.com/x") is None
+
+    def test_un_archivo_solo_mira_la_carpeta_propia(self, tmp_path):
+        mod = self._cargar()
+        (tmp_path / "video.mp4").write_bytes(b"x")
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / "otro.mp4").write_bytes(b"x")
+        encontrado = mod._un_archivo(str(tmp_path), (".mp4",))
+        assert encontrado is not None
+        assert os.path.dirname(encontrado) == str(tmp_path)
+
+    def test_check_nombre_id_exige_el_sufijo(self, tmp_path):
+        mod = self._cargar()
+        url = "https://www.youtube.com/watch?v=jNQXAC9IVRw"
+        bien = tmp_path / "Cafe [jNQXAC9IVRw].mp4"
+        bien.write_bytes(b"x")
+        assert "con [id]" in mod._check_nombre_id(str(bien), url)
+        mal = tmp_path / "Cafe.mp4"
+        mal.write_bytes(b"x")
+        with pytest.raises(RuntimeError):
+            mod._check_nombre_id(str(mal), url)
+
+    def test_check_subtitulos_acepta_el_vtt_junto_al_medio(self, tmp_path):
+        mod = self._cargar()
+        medio = tmp_path / "Cafe [id].mp4"
+        medio.write_bytes(b"x")
+        (tmp_path / "Cafe [id].es.vtt").write_text("WEBVTT", encoding="utf-8")
+        encontrado, detalle = mod._check_subtitulos(str(tmp_path), str(medio))
+        assert encontrado is not None
+        assert detalle.endswith(".vtt")
+
+    def test_check_subtitulos_falla_si_el_vtt_queda_en_subcarpeta(self, tmp_path):
+        mod = self._cargar()
+        medio = tmp_path / "Cafe [id].mp4"
+        medio.write_bytes(b"x")
+        sub = tmp_path / "Cafe [id]"
+        sub.mkdir()
+        (sub / "Cafe.es.vtt").write_text("WEBVTT", encoding="utf-8")
+        with pytest.raises(RuntimeError):
+            mod._check_subtitulos(str(tmp_path), str(medio))
+
+    def test_check_subtitulos_avisa_si_no_hay_vtt(self, tmp_path):
+        mod = self._cargar()
+        medio = tmp_path / "Cafe [id].mp4"
+        medio.write_bytes(b"x")
+        encontrado, detalle = mod._check_subtitulos(str(tmp_path), str(medio))
+        assert encontrado is None
+        assert "no se genero" in detalle
+
+
+class TestSmokeUiEnCI:
+    """El smoke de UI debe ejecutarse en el CI y ser BLOQUEANTE: si la app no
+    arranca, la release no se publica."""
+
+    @staticmethod
+    def _raiz():
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def test_el_script_de_smoke_existe(self):
+        ruta = os.path.join(self._raiz(), "core_tests", "smoke_ui.py")
+        assert os.path.isfile(ruta), "falta core_tests/smoke_ui.py"
+
+    def test_el_workflow_lo_ejecuta_con_xvfb(self):
+        ruta = os.path.join(self._raiz(), ".github", "workflows", "build.yml")
+        with open(ruta, encoding="utf-8") as fh:
+            fuente = fh.read()
+        assert "core_tests/smoke_ui.py" in fuente
+        assert "xvfb-run" in fuente
+        assert "xvfb" in fuente, "el runner de Linux debe instalar xvfb"
+
+    def test_el_script_devuelve_codigo_de_salida(self):
+        import importlib.util
+        if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+            if sys.platform not in ("win32", "darwin"):
+                pytest.skip("sin display: el smoke UI real se ejecuta en el paso xvfb del CI")
+        ruta = os.path.join(self._raiz(), "core_tests", "smoke_ui.py")
+        spec = importlib.util.spec_from_file_location("smoke_ui", ruta)
+        modulo = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(modulo)
+        assert callable(modulo.main)
+        assert modulo.main() in (0, 1)
 
 
 class TestCompararVersiones:
@@ -503,6 +698,54 @@ class TestTiposCuenta:
         assert "zen" in core.NAVEGADORES_COMPATIBLES_ABIERTOS
         assert "firefox" in core.NAVEGADORES_COMPATIBLES_ABIERTOS
         assert "brave" not in core.NAVEGADORES_COMPATIBLES_ABIERTOS
+
+
+class TestContratoTiposRestriccion:
+    """Contrato de los tipos de restriccion (core.py) y de su uso en la UI.
+
+    - 'bot' lo combate core._descargar_fallback_bot (clientes + TODOS los
+      navegadores). La UI no debe repetir esa escalera: solo duplicaria trabajo.
+    - Un tipo de 'bot' nunca debe abortar la verificacion: la descarga tiene
+      su propia escalera y debe llegar a ejecutarse.
+    """
+
+    def test_reintento_sesion_no_incluye_bot(self):
+        assert "bot" not in core.TIPOS_REINTENTO_SESION
+
+    def test_reintento_clientes_es_bot(self):
+        assert core.TIPOS_REINTENTO_CLIENTES == {"bot"}
+
+    def test_bloqueantes_cubre_sesion_y_clientes(self):
+        for tipo in core.TIPOS_REINTENTO_SESION | core.TIPOS_REINTENTO_CLIENTES:
+            assert tipo in core.TIPOS_BLOQUEANTES, tipo
+
+    @pytest.mark.parametrize("tipo", ["cookies", "private", "members_only",
+                                      "age_restricted", "sign_in"])
+    def test_reintentar_con_sesion_true(self, tipo):
+        assert core.reintentar_con_sesion(tipo) is True
+
+    @pytest.mark.parametrize("tipo", ["bot", "geo", "not_found", "desconocido"])
+    def test_reintentar_con_sesion_false(self, tipo):
+        assert core.reintentar_con_sesion(tipo) is False
+
+    @pytest.mark.parametrize("tipo", ["geo", "unavailable", "not_found"])
+    def test_debe_abortar_descarga_true(self, tipo):
+        assert core.debe_abortar_descarga(tipo) is True
+
+    @pytest.mark.parametrize("tipo", ["bot", "cookies", "private", "sign_in"])
+    def test_debe_abortar_descarga_false(self, tipo):
+        assert core.debe_abortar_descarga(tipo) is False
+
+    def test_la_ui_usa_los_helpers_del_core(self):
+        ruta = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "yt-dowloader.py")
+        with open(ruta, encoding="utf-8") as fh:
+            fuente = fh.read()
+        assert "reintentar_con_sesion(" in fuente
+        assert "debe_abortar_descarga(" in fuente
+        assert "set(TIPOS_CUENTA) | {\"cookies\"}" not in fuente
+        assert "TIPOS_BLOQUEANTES" not in fuente
+        assert "TIPOS_REINTENTO_SESION" not in fuente
 
 
 class TestFallbackBotSinCookies:
