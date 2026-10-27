@@ -715,7 +715,7 @@ def extraer_info_video(url, navegador=None):
     return None
 
 
-CLIENTES_FALLBACK_BOT = ["tv", "web_embedded", "android_vr"]
+CLIENTES_FALLBACK_BOT = ["tv", "web_embedded", "android_vr", "ios"]
 
 _IMPERSONACION_DISPONIBLE = None
 

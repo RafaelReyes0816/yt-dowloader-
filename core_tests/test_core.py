@@ -983,7 +983,7 @@ class TestFallbackBotSinCookies:
 
 class TestFallbackBot:
     def test_orden_clientes_fallback(self):
-        assert CLIENTES_FALLBACK_BOT == ["tv", "web_embedded", "android_vr"]
+        assert CLIENTES_FALLBACK_BOT == ["tv", "web_embedded", "android_vr", "ios"]
 
     def test_verificar_prueba_navegadores_tras_bot(self, monkeypatch):
         import core as core_mod
