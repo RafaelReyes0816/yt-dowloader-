@@ -44,6 +44,8 @@ from core import (
     comparar_versiones,
     elegir_navegador_sesion,
     navegadores_para_reintento,
+    navegadores_en_ejecucion,
+    ordenar_navegadores_por_uso,
     extraer_url_completa,
     enmascarar_url,
     sanitizar_detalle,
@@ -1606,12 +1608,29 @@ class App(ctk.CTk):
         self.lbl_navegador.grid(row=0, column=1, sticky="w", padx=(0, 6))
 
         pref_nav = self.prefs.get("navegador", "")
-        nav_elegido = elegir_navegador_sesion(pref_nav) or (self.navegadores[0] if self.navegadores else "")
+        en_uso = navegadores_en_ejecucion(self.navegadores)
+        self.navegadores_ui = ordenar_navegadores_por_uso(self.navegadores, pref_navegador=pref_nav)
+        if pref_nav in self.navegadores_ui:
+            nav_elegido = pref_nav
+        elif en_uso:
+            nav_elegido = en_uso[0]
+        else:
+            nav_elegido = elegir_navegador_sesion(pref_nav) or (self.navegadores_ui[0] if self.navegadores_ui else "")
         nav_inicial = nav_elegido.capitalize() if nav_elegido else "Sin detectar"
+        if nav_elegido in en_uso:
+            nav_inicial = f"{nav_elegido.capitalize()} (en uso)"
         self.navegador_var = ctk.StringVar(value=nav_inicial)
+        opciones_nav = []
+        for n in self.navegadores_ui:
+            if n in en_uso:
+                opciones_nav.append(f"{n.capitalize()} (en uso)")
+            else:
+                opciones_nav.append(n.capitalize())
+        if not opciones_nav:
+            opciones_nav = ["Sin detectar"]
         self.navegador_option = self._crear_dropdown(row3, self.navegador_var,
-                                                     [n.capitalize() for n in self.navegadores] or ["Sin detectar"],
-                                                     width=120)
+                                                     opciones_nav,
+                                                     width=150)
         self.navegador_option.grid(row=0, column=2, sticky="w")
 
         for var in (self.modo_var, self.calidad_var, self.carpeta_var, self.paralelas_var,
@@ -1842,6 +1861,8 @@ class App(ctk.CTk):
 
     def _navegador_preferido(self):
         valor = self.navegador_var.get().lower()
+        if "(en uso)" in valor:
+            valor = valor.replace("(en uso)", "").strip()
         return valor if valor in self.navegadores else ""
 
     def _navegador_seleccionado(self):

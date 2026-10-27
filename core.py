@@ -6,6 +6,7 @@ import shutil
 import hashlib
 import platform
 import urllib.request
+import subprocess
 
 import yt_dlp
 
@@ -174,6 +175,19 @@ def debe_abortar_descarga(tipo):
 ORDEN_NAVEGADORES = ["zen", "firefox", "waterfox", "librewolf", "brave", "vivaldi", "opera", "chrome", "edge"]
 
 NAVEGADORES_COMPATIBLES_ABIERTOS = ["zen", "firefox", "waterfox", "librewolf"]
+
+# Nombres de proceso por navegador (para detectar "en uso")
+_NOMBRES_PROCESO_NAV = {
+    "chrome": {"chrome.exe", "google-chrome", "chromium", "chromium-browser"},
+    "edge": {"msedge.exe", "microsoft-edge"},
+    "brave": {"brave.exe", "brave-browser"},
+    "vivaldi": {"vivaldi.exe", "vivaldi"},
+    "opera": {"opera.exe", "opera"},
+    "firefox": {"firefox.exe", "firefox"},
+    "zen": {"zen.exe", "zen-browser", "app.zen_browser.zen", "zen"},
+    "waterfox": {"waterfox.exe", "waterfox"},
+    "librewolf": {"librewolf.exe", "librewolf"},
+}
 
 PERFIL_CHROMIUM = "Local State"
 PERFIL_FIREFOX = "profiles.ini"
@@ -1318,3 +1332,103 @@ def navegadores_para_reintento(pref_navegador="", detectados=None, solo_gecko=Fa
         if nav not in orden:
             orden.append(nav)
     return orden
+
+
+def _obtener_procesos_ejecucion():
+    """Lista de nombres de proceso en ejecución (minúsculas)."""
+    procesos = []
+    # Intentar con psutil si está disponible (funciona en .venv)
+    try:
+        import psutil
+
+        for p in psutil.process_iter(["name"]):
+            try:
+                nombre = p.info.get("name") or ""
+                if nombre:
+                    procesos.append(nombre.lower())
+            except Exception:
+                continue
+        if procesos:
+            return procesos
+    except Exception:
+        pass
+
+    # Fallbacks por sistema
+    try:
+        if sys.platform == "win32":
+            out = subprocess.check_output(
+                ["tasklist", "/FO", "CSV", "/NH"], stderr=subprocess.DEVNULL
+            )
+            texto = out.decode("cp1252", errors="ignore").lower()
+            for linea in texto.splitlines():
+                if "," in linea:
+                    partes = linea.split(",")
+                    if partes:
+                        exe = partes[0].strip().strip('"')
+                        if exe:
+                            procesos.append(exe)
+            return procesos
+        if sys.platform == "darwin":
+            out = subprocess.check_output(["ps", "-A", "-o", "comm"], stderr=subprocess.DEVNULL)
+            for linea in out.decode(errors="ignore").splitlines():
+                linea = linea.strip().lower()
+                if not linea:
+                    continue
+                if "/" in linea:
+                    linea = linea.split("/")[-1]
+                procesos.append(linea)
+            return procesos
+        # Linux
+        out = subprocess.check_output(["ps", "-eo", "comm"], stderr=subprocess.DEVNULL)
+        for linea in out.decode(errors="ignore").splitlines():
+            linea = linea.strip().lower()
+            if not linea:
+                continue
+            if "/" in linea:
+                linea = linea.split("/")[-1]
+            procesos.append(linea)
+        return procesos
+    except Exception:
+        return []
+
+
+def navegadores_en_ejecucion(detectados=None):
+    """Devuelve navegadores detectados que están en ejecución, en orden preferente."""
+    if detectados is None:
+        detectados = detectar_navegadores()
+    if not detectados:
+        return []
+    procs = set(_obtener_procesos_ejecucion())
+    if not procs:
+        return []
+    en_uso = []
+    for nav in detectados:
+        nombres = _NOMBRES_PROCESO_NAV.get(nav) or set()
+        if nombres and (nombres & procs):
+            if nav not in en_uso:
+                en_uso.append(nav)
+    en_uso_ordenado = []
+    for nav in ORDEN_NAVEGADORES:
+        if nav in en_uso and nav not in en_uso_ordenado:
+            en_uso_ordenado.append(nav)
+    for nav in en_uso:
+        if nav not in en_uso_ordenado:
+            en_uso_ordenado.append(nav)
+    return en_uso_ordenado
+
+
+def ordenar_navegadores_por_uso(navegadores, pref_navegador="", detectados=None):
+    """Reordena lista poniendo navegadores en ejecución primero."""
+    if not navegadores:
+        return []
+    if detectados is None:
+        detectados = navegadores
+    en_uso = navegadores_en_ejecucion(detectados)
+    resultado = []
+    for nav in en_uso:
+        if nav in navegadores and nav not in resultado:
+            resultado.append(nav)
+    for nav in navegadores:
+        if nav not in resultado:
+            resultado.append(nav)
+    return resultado
